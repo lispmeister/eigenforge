@@ -1,0 +1,38 @@
+{
+  "$id": "eigenforge.delivery_receipt",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Eigenforge Delivery Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "x-elixir-module": "Eigenforge.Contracts.DeliveryReceipt",
+  "x-format-version": "json-canonical-v1",
+  "x-schema-version": 1,
+  "required": [
+    "format_version",
+    "schema_id",
+    "schema_version",
+    "receipt_id",
+    "command_id",
+    "decision_event_id",
+    "ledger_sequence",
+    "ledger_event_hash",
+    "delivered_topic",
+    "delivered_at",
+    "signature_version",
+    "signature"
+  ],
+  "properties": {
+    "format_version": { "type": "string", "const": "json-canonical-v1" },
+    "schema_id": { "type": "string", "const": "eigenforge.delivery_receipt" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "receipt_id": { "type": "string" },
+    "command_id": { "type": "string" },
+    "decision_event_id": { "type": "string" },
+    "ledger_sequence": { "type": "integer" },
+    "ledger_event_hash": { "type": "string" },
+    "delivered_topic": { "type": "string" },
+    "delivered_at": { "type": "string", "format": "date-time" },
+    "signature_version": { "type": "string" },
+    "signature": { "type": "string" }
+  }
+}

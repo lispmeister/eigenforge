@@ -1,0 +1,40 @@
+{
+  "$id": "eigenforge.capability_check",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Eigenforge Capability Check",
+  "type": "object",
+  "additionalProperties": false,
+  "x-elixir-module": "Eigenforge.Contracts.CapabilityCheck",
+  "x-format-version": "json-canonical-v1",
+  "x-schema-version": 1,
+  "required": [
+    "format_version",
+    "schema_id",
+    "schema_version",
+    "capability_check_id",
+    "subject",
+    "target",
+    "action",
+    "scope",
+    "result",
+    "reason",
+    "checked_at"
+  ],
+  "properties": {
+    "format_version": { "type": "string", "const": "json-canonical-v1" },
+    "schema_id": { "type": "string", "const": "eigenforge.capability_check" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "capability_check_id": { "type": "string" },
+    "subject": { "type": "string" },
+    "target": { "type": "string" },
+    "action": { "type": "string" },
+    "scope": { "type": "string" },
+    "grant_id": { "type": ["string", "null"] },
+    "result": {
+      "type": "string",
+      "enum": ["allow", "deny_missing_capability", "deny_invalid_capability"]
+    },
+    "reason": { "type": "string" },
+    "checked_at": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "$id": "eigenforge.reasoner_outcome",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Eigenforge Reasoner Outcome",
+  "type": "object",
+  "additionalProperties": false,
+  "x-elixir-module": "Eigenforge.Contracts.ReasonerOutcome",
+  "x-format-version": "json-canonical-v1",
+  "x-schema-version": 1,
+  "required": [
+    "format_version",
+    "schema_id",
+    "schema_version",
+    "reasoner_id",
+    "reasoner_version",
+    "snapshot_id",
+    "snapshot_hash",
+    "outcome_type",
+    "reason",
+    "confidence_bps"
+  ],
+  "properties": {
+    "format_version": { "type": "string", "const": "json-canonical-v1" },
+    "schema_id": { "type": "string", "const": "eigenforge.reasoner_outcome" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "reasoner_id": { "type": "string" },
+    "reasoner_version": { "type": "string" },
+    "snapshot_id": { "type": "string" },
+    "snapshot_hash": { "type": "string" },
+    "outcome_type": {
+      "type": "string",
+      "enum": ["propose_action", "propose_no_action", "no_threshold_event", "insufficient_fresh_data"]
+    },
+    "target": { "type": ["string", "null"] },
+    "requested_state": { "type": ["string", "null"] },
+    "reason": { "type": "string" },
+    "confidence_bps": { "type": "integer" },
+    "metadata": { "type": "object" }
+  }
+}

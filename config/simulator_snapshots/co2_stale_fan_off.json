@@ -1,0 +1,29 @@
+{
+  "snapshot_id": "snap-co2-stale-fan-off",
+  "snapshot_seq": 3,
+  "room_id": "placeholder",
+  "co2_ppm": 1200,
+  "humidity_percent": 4500,
+  "temperature_c": 22000,
+  "fan_state": "off",
+  "source_entity_ids": {
+    "co2": "sensor.placeholder_co2",
+    "humidity": "sensor.placeholder_humidity",
+    "temperature": "sensor.placeholder_temperature",
+    "fan": "switch.placeholder_fan"
+  },
+  "source_observed_at": {
+    "co2": "2026-05-08T11:59:00.000Z",
+    "humidity": "2026-05-08T12:00:00.000Z",
+    "temperature": "2026-05-08T12:00:00.000Z",
+    "fan": "2026-05-08T12:00:00.000Z"
+  },
+  "source_status": {
+    "co2": "stale",
+    "humidity": "fresh",
+    "temperature": "fresh",
+    "fan": "fresh"
+  },
+  "normalized_at": "2026-05-08T12:00:00.000Z",
+  "freshness": "stale"
+}

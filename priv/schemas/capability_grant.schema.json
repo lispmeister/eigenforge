@@ -1,0 +1,32 @@
+{
+  "$id": "eigenforge.capability_grant",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Eigenforge Capability Grant",
+  "type": "object",
+  "additionalProperties": false,
+  "x-elixir-module": "Eigenforge.Contracts.CapabilityGrant",
+  "x-format-version": "json-canonical-v1",
+  "x-schema-version": 1,
+  "required": [
+    "format_version",
+    "schema_id",
+    "schema_version",
+    "grant_id",
+    "subject",
+    "target",
+    "action",
+    "scope",
+    "issued_at"
+  ],
+  "properties": {
+    "format_version": { "type": "string", "const": "json-canonical-v1" },
+    "schema_id": { "type": "string", "const": "eigenforge.capability_grant" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "grant_id": { "type": "string" },
+    "subject": { "type": "string" },
+    "target": { "type": "string" },
+    "action": { "type": "string" },
+    "scope": { "type": "string" },
+    "issued_at": { "type": "string", "format": "date-time" }
+  }
+}
