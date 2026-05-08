@@ -8,8 +8,8 @@ guidelines in *Writing the Laboratory Notebook*. It records engineering
 sessions, design decisions, experiments, failures, and verification results
 that do not fit cleanly into commit messages.
 
-**Last updated:** 2026-05-08  
-**Total entries:** 1  
+**Last updated:** 2026-05-08
+**Total entries:** 2
 **How to maintain:** Add one chronological row every time a journal file is
 created.
 

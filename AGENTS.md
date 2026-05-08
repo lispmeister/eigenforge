@@ -2,21 +2,29 @@
 
 ## Lab Journal
 
-Eigenforge uses a structured engineering lab journal for sessions that change
-code, specs, architecture, or durable project decisions.
+Eigenforge has a structured engineering lab journal for recording selected
+sessions.
 
 This workflow is adapted from
 <https://github.com/lispmeister/lab-journal>, which follows Howard M. Kanare's
 laboratory notebook principles: permanence, immediacy, self-containment,
 completeness, and witnessing.
 
-## Starting A Session
+## When To Use It
+
+Only create or update lab journal entries when the user explicitly asks for a
+journal entry, asks to use the lab journal, or asks to record the session.
+
+Do not create or update journal files by default for ordinary code, spec,
+architecture, or project-decision work.
+
+## Starting A Requested Journal Entry
 
 1. Copy `lab-journal/TEMPLATE.md` to `lab-journal/journal-YYYY-MM-DD.md`.
    Append `b`, `c`, and so on for multiple entries on the same date.
 2. Fill in date, session goals, and known context before starting work.
 
-## During A Session
+## During A Requested Journal Entry
 
 - Record observations, decisions, commands, errors, and results as the session
   proceeds.
@@ -29,7 +37,7 @@ completeness, and witnessing.
 - Link to commits, specs, issue IDs, command output, and artifacts rather than
   duplicating everything in prose.
 
-## Ending A Session
+## Ending A Requested Journal Entry
 
 Fill in the footer block:
 

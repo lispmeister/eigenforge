@@ -64,8 +64,8 @@ elixir tools/generate_contracts.exs
 
 ## Lab Journal
 
-Engineering sessions that change code, specs, architecture, or durable project
-decisions should be recorded in the lab journal:
+Engineering sessions can be recorded in the lab journal when explicitly
+requested:
 
 - [lab-journal/index.md](lab-journal/index.md)
 - [lab-journal/TEMPLATE.md](lab-journal/TEMPLATE.md)
@@ -73,8 +73,8 @@ decisions should be recorded in the lab journal:
 The workflow is adapted from
 [lispmeister/lab-journal](https://github.com/lispmeister/lab-journal), a
 structured engineering journal based on Kanare's laboratory notebook practices.
-Codex instructions live in [AGENTS.md](AGENTS.md). A Claude-compatible copy
-lives in [CLAUDE.md](CLAUDE.md).
+Canonical agent instructions live in [AGENTS.md](AGENTS.md). [CLAUDE.md](CLAUDE.md)
+is a short compatibility pointer for Claude-oriented tooling.
 
 ## Prototype Architecture
 
