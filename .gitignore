@@ -1,5 +1,6 @@
-test
 .env
 .claude
 tmp
 archive
+library
+_build
