@@ -1,5 +1,13 @@
 # Agent Instructions
 
+## Task Tracking
+
+This project uses the Ticket CLI (`tk`) for task management.
+
+- Always use `tk` commands for creating, updating, and tracking tasks.
+- Never use markdown TODO lists or Beads.
+- Run `tk ready` to see what to work on next.
+
 ## Lab Journal
 
 Eigenforge has a structured engineering lab journal for recording selected
