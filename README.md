@@ -5,7 +5,8 @@ infrastructure.
 
 The long-term goal is a live, inspectable, capability-bounded control fabric
 where AI cognition can participate in system operation without bypassing
-explicit authority, policy, audit, adapters, or later quorum.
+explicit authority, policy, durable decision/action records, adapters, or later
+quorum.
 
 The current work has been narrowed into a first prototype spec:
 
@@ -23,8 +24,10 @@ The prototype will use:
 - Home Assistant as the first device adapter.
 - Home Assistant WebSocket events for sensor ingest.
 - Home Assistant REST calls for fan execution.
-- Postgres as the durable mailbox/audit store.
-- HMAC-SHA256 signatures for audit entries and capability grants.
+- Postgres as the durable decision/action ledger.
+- HMAC-SHA256 signatures for ledger events, command envelopes, device config,
+  and capability grants.
+- Schema-backed generated contract modules for control messages.
 - Static signed capability grants loaded from config.
 - Plain Elixir policy functions.
 - A deterministic rule stub in place of AI inference.
@@ -46,6 +49,19 @@ otherwise:
 If the CO2 reading is stale, the system records a signed alert event and issues
 no actuator command.
 
+## Contract Schemas
+
+V1 control messages are defined from checked-in JSON Schemas under
+`priv/schemas`. Generated Elixir contract modules live under
+`lib/eigenforge/contracts/generated` and share canonical JSON, hashing, and
+HMAC helpers from `Eigenforge.Contracts`.
+
+Regenerate contract modules with:
+
+```text
+elixir tools/generate_contracts.exs
+```
+
 ## Prototype Architecture
 
 The planned umbrella shape is:
@@ -60,13 +76,16 @@ eigenforge_umbrella
 
 Responsibilities:
 
-- `eigenforge_mailbox`: Postgres-backed audit/event log and event routing.
-- `eigenforge_io`: Home Assistant ingest and command adapter.
-- `eigenforge_core`: capabilities, policies, rule stub, and command envelopes.
-- `eigenforge_dashboard`: Phoenix dashboard over the shared state/audit model.
+- `eigenforge_mailbox`: dumb channel manager for routing, delivery, and read
+  projections.
+- `eigenforge_io`: passive Home Assistant/simulator ingest and command adapter.
+- `eigenforge_core`: OODA loop, capabilities, policies, reasoner, ledger
+  records, and command envelopes.
+- `eigenforge_dashboard`: read-only Phoenix dashboard over live IO streams and
+  durable decision/action history.
 
-The IO boundary, core authority, mailbox/audit log, and dashboard are kept
-separate even though the first prototype runs locally.
+The IO boundary, core authority, mailbox boundary, durable ledger, and
+dashboard are kept separate even though the first prototype runs locally.
 
 ## V1 Device Scope
 
@@ -105,12 +124,14 @@ HA_FAN_ENTITY_ID=switch.placeholder_fan
 The app should fail fast when required Home Assistant or signing configuration
 is missing.
 
-## Audit And Capabilities
+## Ledger And Capabilities
 
-V1 treats auditability as part of the core prototype, not a later add-on.
+V1 treats durable decision/action history as part of the core prototype, not a
+later add-on.
 
-All persisted audit events should be signed with HMAC-SHA256. Capability grants
-are also signed and loaded from config files at startup.
+All persisted ledger events should be signed with HMAC-SHA256 and
+hash-chained. Capability grants are also signed and loaded from config files at
+startup.
 
 The prototype should include a small Mix task or CLI helper to create signed
 capability grant files, for example:
@@ -135,7 +156,7 @@ It should show:
 - Home Assistant connection status;
 - last command envelope;
 - latest policy and capability decision;
-- recent signed audit events;
+- recent durable decision/action ledger events;
 - stale sensor alert status.
 
 Manual dashboard commands are excluded from V1.
@@ -175,32 +196,32 @@ Home Assistant is only the first convenient adapter, not Eigenforge authority.
 
 ### Native Dashboard
 
-Add a Scenic native dashboard after the Phoenix state model and audit views are
-working.
+Add a Scenic native dashboard after the Phoenix state model and durable ledger
+views are working.
 
 ### Manual Commands
 
 Add dashboard-originated manual intents that pass through the same
-capability, policy, audit, command-envelope, and later voting path as
+capability, policy, durable ledger, command-envelope, and later voting path as
 AI-originated actions.
 
 ### Stronger Cryptography
 
 Move from local HMAC-SHA256 signatures to asymmetric signatures for capability
-grants, audit events, and eventually quorum-signed command envelopes.
+grants, ledger events, and eventually quorum-signed command envelopes.
 
 ### Capability OS Substrates
 
-Keep the core object, capability, policy, voting, and audit model portable
-toward substrates such as Kry10, seL4, Genode, Nerves, CHERI-like environments,
-or other capability-oriented runtimes.
+Keep the core object, capability, policy, voting, and durable ledger model
+portable toward substrates such as Kry10, seL4, Genode, Nerves, CHERI-like
+environments, or other capability-oriented runtimes.
 
 ### cFS Integration
 
 Treat cFS as a possible lower-level static subsystem bus, not the identity of
 Eigenforge. Eigenforge should own the principal model, capability model, policy
-model, AI cognition loop, voting semantics, audit schema, dashboard, and adapter
-boundaries.
+model, AI cognition loop, voting semantics, ledger schema, dashboard, and
+adapter boundaries.
 
 ### Runtime Molding And Self-Modification
 
