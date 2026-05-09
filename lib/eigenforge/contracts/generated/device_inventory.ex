@@ -12,15 +12,18 @@ defmodule Eigenforge.Contracts.DeviceInventory do
   @format_version "json-canonical-v1"
   @fields [:format_version, :rooms, :schema_id, :schema_version]
   @required_fields [:format_version, :schema_id, :schema_version, :rooms]
-  @field_types [format_version: :string, rooms: :array, schema_id: :string, schema_version: :integer]
+  @field_types [
+    format_version: :string,
+    rooms: :array,
+    schema_id: :string,
+    schema_version: :integer
+  ]
 
   @enforce_keys []
-  defstruct [
-    format_version: nil,
-    rooms: nil,
-    schema_id: nil,
-    schema_version: nil
-  ]
+  defstruct format_version: nil,
+            rooms: nil,
+            schema_id: nil,
+            schema_version: nil
 
   @type t :: %__MODULE__{
           format_version: String.t() | nil,
@@ -43,5 +46,7 @@ defmodule Eigenforge.Contracts.DeviceInventory do
   def canonical_json(value), do: Eigenforge.Contracts.canonical_json(signable_map(value))
   def payload_hash(value), do: Eigenforge.Contracts.payload_hash(value)
   def sign_hmac(value, secret), do: Eigenforge.Contracts.sign_hmac(value, secret)
-  def verify_hmac(value, secret, signature), do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
+
+  def verify_hmac(value, secret, signature),
+    do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
 end

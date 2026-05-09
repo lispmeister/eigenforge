@@ -1,0 +1,1185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Eigenforge Prototype V1 Implementation Spec</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17212b;
+      --muted: #617183;
+      --line: #d7dee7;
+      --panel: #f7f9fb;
+      --paper: #ffffff;
+      --core: #146a78;
+      --io: #8a4a14;
+      --mail: #6c4a99;
+      --contracts: #2f6b3f;
+      --dashboard: #9a3e5a;
+      --danger: #b3261e;
+      --ok: #18794e;
+      --warn: #a15c00;
+      --shadow: 0 18px 50px rgba(31, 42, 55, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #edf2f6;
+    }
+
+    header {
+      background: #14232f;
+      color: #fff;
+      padding: 56px 24px 34px;
+    }
+
+    header .wrap,
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    .kicker {
+      margin: 0 0 10px;
+      color: #b9d7df;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 900px;
+      margin: 0;
+      font-size: clamp(36px, 5vw, 68px);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      max-width: 820px;
+      margin: 18px 0 0;
+      color: #dbe8ee;
+      font-size: 20px;
+    }
+
+    main {
+      padding: 28px 24px 64px;
+    }
+
+    section {
+      margin: 26px 0;
+      padding: 26px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 26px;
+      line-height: 1.2;
+    }
+
+    h3 {
+      margin: 20px 0 8px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: #eef3f7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 12px 0 0;
+      padding: 16px;
+      border-radius: 8px;
+      background: #101820;
+      color: #eaf3f8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .card pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .card h3,
+    .card h4 {
+      margin-top: 0;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      margin: 4px 6px 4px 0;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .app {
+      border-left: 5px solid var(--line);
+    }
+
+    .app.contracts { border-left-color: var(--contracts); }
+    .app.io { border-left-color: var(--io); }
+    .app.core { border-left-color: var(--core); }
+    .app.mailbox { border-left-color: var(--mail); }
+    .app.dashboard { border-left-color: var(--dashboard); }
+
+    table {
+      width: 100%;
+      min-width: 640px;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+
+    table {
+      display: block;
+      overflow-x: auto;
+    }
+
+    thead,
+    tbody {
+      display: table;
+      width: 100%;
+      min-width: 640px;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      color: #314353;
+      background: #f0f4f7;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .diagram {
+      width: 100%;
+      min-height: 260px;
+      margin-top: 14px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      min-width: 780px;
+    }
+
+    .diagram.compact svg {
+      min-width: 520px;
+    }
+
+    .svg-title {
+      font-size: 20px;
+      font-weight: 800;
+      fill: var(--ink);
+    }
+
+    .svg-label {
+      font-size: 14px;
+      font-weight: 700;
+      fill: var(--ink);
+    }
+
+    .svg-small {
+      font-size: 12px;
+      fill: var(--muted);
+    }
+
+    .edge-label {
+      font-size: 11px;
+      fill: #526477;
+      paint-order: stroke;
+      stroke: #fbfdff;
+      stroke-width: 5px;
+      stroke-linejoin: round;
+    }
+
+    .node {
+      stroke: #9aabbc;
+      stroke-width: 1.2;
+      rx: 8;
+    }
+
+    .edge {
+      fill: none;
+      stroke: #627386;
+      stroke-width: 2;
+      marker-end: url(#arrow);
+    }
+
+    .edge-soft {
+      fill: none;
+      stroke: #9aabbc;
+      stroke-width: 1.5;
+      stroke-dasharray: 6 6;
+      marker-end: url(#arrowSoft);
+    }
+
+    .status {
+      font-weight: 800;
+    }
+
+    .allow { color: var(--ok); }
+    .deny { color: var(--danger); }
+    .defer { color: var(--warn); }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .note {
+      border-left: 4px solid var(--core);
+      padding: 12px 14px;
+      background: #eef7f8;
+      color: #203842;
+      border-radius: 0 8px 8px 0;
+    }
+
+    @media (max-width: 760px) {
+      header {
+        padding-top: 38px;
+      }
+
+      main {
+        padding: 18px 12px 44px;
+      }
+
+      section {
+        padding: 18px;
+      }
+
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+
+      table,
+      thead,
+      tbody {
+        min-width: 560px;
+      }
+
+      svg {
+        min-width: 680px;
+      }
+
+      .diagram.compact svg {
+        min-width: 500px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="kicker">Prototype V1 · Implementation Spec Visualized</p>
+      <h1>Eigenforge Control Loop, Contracts, Ledger, and IO Boundaries</h1>
+      <p class="lede">
+        V1 proves a small, inspectable input/output control loop with the same
+        persistence boundary the quorum design will need later: observe live IO,
+        reason deterministically, finalize the decision, commit it to the local
+        core SQLite ledger, issue a signed command envelope, execute through IO,
+        then record core-authored after-action truth.
+      </p>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>Scope Snapshot</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>V1 Proves</h3>
+          <span class="pill">Home Assistant IO</span>
+          <span class="pill">Simulator mode</span>
+          <span class="pill">One room with room_id</span>
+          <span class="pill">CO2 fan control</span>
+          <span class="pill">Canonical JSON</span>
+          <span class="pill">HMAC signatures</span>
+          <span class="pill">Local SQLite ledger</span>
+          <span class="pill">Finalization boundary</span>
+          <span class="pill">Golden traces</span>
+        </div>
+        <div class="card">
+          <h3>V1 Defers</h3>
+          <span class="pill">Three-core quorum</span>
+          <span class="pill">LLM reasoners</span>
+          <span class="pill">Manual commands</span>
+          <span class="pill">Hysteresis</span>
+          <span class="pill">InfluxDB charts</span>
+          <span class="pill">ESPHome direct control</span>
+          <span class="pill">Asymmetric crypto</span>
+          <span class="pill">External anchoring</span>
+        </div>
+        <div class="card">
+          <h3>Implementation Gate</h3>
+          <p>
+            Home Assistant integration and LiveView dashboard work wait until
+            simulator traces pass for fan-on, no-action, and stale-deny cases.
+          </p>
+          <pre>simulator snapshot
+-> core reasoner
+-> capability + policy
+-> finalized decision
+-> local SQLite ledger
+-> command envelope
+-> delivery receipt
+-> simulated IO execution
+-> after-action event
+-> ledger verification</pre>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>System Design</h2>
+      <p>
+        Eigenforge V1 is an Elixir umbrella with strict authority boundaries.
+        Contracts provide shared message shape and signing helpers; IO owns the
+        outside-world boundary; core owns decision authority and its local
+        SQLite ledger; mailbox routes immutable envelopes; dashboard reads
+        state only.
+      </p>
+      <div class="diagram" aria-label="Umbrella application architecture">
+        <svg viewBox="0 0 1120 520" role="img">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#627386"></path>
+            </marker>
+            <marker id="arrowSoft" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#9aabbc"></path>
+            </marker>
+          </defs>
+
+          <text class="svg-title" x="36" y="40">Umbrella apps and authority boundaries</text>
+
+          <rect class="node" x="40" y="92" width="200" height="130" fill="#fff6ed"></rect>
+          <text class="svg-label" x="62" y="124">Outside World</text>
+          <text class="svg-small" x="62" y="150">Home Assistant</text>
+          <text class="svg-small" x="62" y="172">Simulator fixtures</text>
+          <text class="svg-small" x="62" y="194">Sensor and actuator state</text>
+
+          <rect class="node" x="320" y="84" width="220" height="150" fill="#fff2e4" stroke="#c9823f"></rect>
+          <text class="svg-label" x="344" y="116">eigenforge_io</text>
+          <text class="svg-small" x="344" y="142">Normalize observations</text>
+          <text class="svg-small" x="344" y="164">Publish live streams</text>
+          <text class="svg-small" x="344" y="186">Verify envelopes before execution</text>
+          <text class="svg-small" x="344" y="208">No policy, no ledger writes</text>
+
+          <rect class="node" x="640" y="84" width="230" height="150" fill="#eaf7f8" stroke="#3b8793"></rect>
+          <text class="svg-label" x="664" y="116">eigenforge_core</text>
+          <text class="svg-small" x="664" y="142">OODA loop authority</text>
+          <text class="svg-small" x="664" y="164">Reasoner + capability + policy</text>
+          <text class="svg-small" x="664" y="186">Finalize before command</text>
+          <text class="svg-small" x="664" y="208">After-action interpretation</text>
+
+          <rect class="node" x="640" y="304" width="230" height="120" fill="#f4eefb" stroke="#7b61a8"></rect>
+          <text class="svg-label" x="664" y="336">eigenforge_mailbox</text>
+          <text class="svg-small" x="664" y="362">Dumb routing boundary</text>
+          <text class="svg-small" x="664" y="384">Delivery receipts</text>
+          <text class="svg-small" x="664" y="406">No authorization semantics</text>
+
+          <rect class="node" x="914" y="84" width="170" height="150" fill="#eef8f0" stroke="#5f8f68"></rect>
+          <text class="svg-label" x="936" y="116">contracts</text>
+          <text class="svg-small" x="936" y="142">JSON Schemas</text>
+          <text class="svg-small" x="936" y="164">Generated modules</text>
+          <text class="svg-small" x="936" y="186">Canonical JSON</text>
+          <text class="svg-small" x="936" y="208">Hash + HMAC helpers</text>
+
+          <rect class="node" x="914" y="304" width="170" height="120" fill="#fff0f4" stroke="#b05c75"></rect>
+          <text class="svg-label" x="936" y="336">dashboard</text>
+          <text class="svg-small" x="936" y="362">LiveView read-only</text>
+          <text class="svg-small" x="936" y="384">Streams + projections</text>
+          <text class="svg-small" x="936" y="406">No manual commands</text>
+
+          <rect class="node" x="378" y="326" width="170" height="80" fill="#f4f7fa"></rect>
+          <text class="svg-label" x="402" y="358">SQLite</text>
+          <text class="svg-small" x="402" y="382">local core ledger</text>
+
+          <path class="edge" d="M240 156 H320"></path>
+          <text class="edge-label" x="250" y="134">HA WS</text>
+          <path class="edge" d="M540 146 H640"></path>
+          <text class="edge-label" x="560" y="136">live stream</text>
+          <path class="edge" d="M706 234 L516 326"></path>
+          <text class="edge-label" x="520" y="288">append finalized events</text>
+          <path class="edge" d="M752 234 V304"></path>
+          <text class="edge-label" x="764" y="270">after commit</text>
+          <path class="edge" d="M640 364 H540"></path>
+          <text class="edge-label" x="555" y="350">commands:io</text>
+          <path class="edge" d="M640 392 L528 214"></path>
+          <path class="edge-soft" d="M870 152 H914"></path>
+          <path class="edge-soft" d="M870 360 H914"></path>
+          <path class="edge-soft" d="M540 228 L914 228"></path>
+          <path class="edge-soft" d="M870 394 H914"></path>
+          <path class="edge-soft" d="M870 414 H914"></path>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>Application Responsibilities</h2>
+      <div class="grid">
+        <div class="card app contracts">
+          <h3>eigenforge_contracts</h3>
+          <p>Owns schemas, generated modules, canonical JSON, hashing, HMAC signing, verification helpers, and golden trace display maps.</p>
+          <p><strong>Does not own:</strong> runtime authority, IO, delivery, dashboard rendering, or local ledger writes.</p>
+        </div>
+        <div class="card app io">
+          <h3>eigenforge_io</h3>
+          <p>Connects to Home Assistant or simulator, normalizes observations, publishes streams, verifies envelopes, executes valid commands, and logs IO fault/status locally.</p>
+          <p><strong>Does not own:</strong> decisions, policy, core SQLite writes, or after-action truth.</p>
+        </div>
+        <div class="card app core">
+          <h3>eigenforge_core</h3>
+          <p>Owns the OODA loop: validate live input, run reasoner, check capability and policy, finalize decisions, write the local SQLite ledger, issue signed envelopes, and interpret after-action evidence.</p>
+        </div>
+        <div class="card app mailbox">
+          <h3>eigenforge_mailbox</h3>
+          <p>Accepts, stores, routes, and delivers immutable messages. It may create mechanical delivery receipts after the corresponding local ledger commit.</p>
+          <p><strong>Does not own:</strong> signature validation, authorization, payload enrichment, or policy.</p>
+        </div>
+        <div class="card app dashboard">
+          <h3>eigenforge_dashboard</h3>
+          <p>Read-only Phoenix LiveView showing active IO mode, sensor state, fan state, decisions, recent ledger events, and IO faults/status.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Consensus And Local Persistence</h2>
+      <p>
+        Each core node owns a local SQLite database. V1 treats the single core
+        as a one-member consensus group; V2 replaces that boundary with
+        three-core quorum while preserving the same rule: finalize first,
+        persist locally, then command IO.
+      </p>
+      <div class="grid">
+        <div class="card">
+          <h3>V1 Persistence</h3>
+          <span class="pill">one core node</span>
+          <span class="pill">single-core finalized</span>
+          <span class="pill">SQLite WAL mode</span>
+          <span class="pill">append-only triggers</span>
+          <p>Core stores finalized OODA facts only: reasoner outcomes, capability checks, policy decisions, command envelopes, relevant faults, and after-action events.</p>
+        </div>
+        <div class="card">
+          <h3>Core Does Not Store</h3>
+          <span class="pill">bulk telemetry</span>
+          <span class="pill">sensor history</span>
+          <span class="pill">actuator history</span>
+          <span class="pill">historian charts</span>
+          <p>Live and historical sensor data stay in Home Assistant, simulator streams, and future historian systems.</p>
+        </div>
+        <div class="card">
+          <h3>Network Split Rule</h3>
+          <span class="pill">2-of-3 may finalize</span>
+          <span class="pill">1-of-3 cannot command</span>
+          <span class="pill">signed catch-up</span>
+          <span class="pill">node-local sequence</span>
+          <p>After a partition heals, nodes accept only signed finalized decisions with valid quorum evidence.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Message Flow</h2>
+      <p>
+        A command can only cross into IO after core finalizes the decision and
+        commits the relevant event to its local SQLite ledger. IO then verifies
+        both the command envelope and delivery receipt before execution.
+      </p>
+      <div class="diagram" aria-label="Command message sequence">
+        <svg viewBox="0 0 1120 640" role="img">
+          <defs>
+            <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#627386"></path>
+            </marker>
+          </defs>
+          <text class="svg-title" x="36" y="40">Fan-on path: observation to after-action</text>
+
+          <g stroke="#c8d2dd" stroke-width="2">
+            <line x1="130" y1="82" x2="130" y2="590"></line>
+            <line x1="320" y1="82" x2="320" y2="590"></line>
+            <line x1="510" y1="82" x2="510" y2="590"></line>
+            <line x1="700" y1="82" x2="700" y2="590"></line>
+            <line x1="890" y1="82" x2="890" y2="590"></line>
+          </g>
+
+          <text class="svg-label" x="76" y="76">Outside</text>
+          <text class="svg-label" x="282" y="76">IO</text>
+          <text class="svg-label" x="466" y="76">Core</text>
+          <text class="svg-label" x="626" y="76">SQLite Ledger</text>
+          <text class="svg-label" x="834" y="76">Mailbox</text>
+
+          <g stroke="#627386" stroke-width="2" marker-end="url(#arrow2)" fill="none">
+            <path d="M130 120 H320"></path>
+            <path d="M320 172 H510"></path>
+            <path d="M510 228 H700"></path>
+            <path d="M700 280 H510"></path>
+            <path d="M510 332 H890"></path>
+            <path d="M890 384 H320"></path>
+            <path d="M320 436 H130"></path>
+            <path d="M320 488 H510"></path>
+            <path d="M510 540 H700"></path>
+          </g>
+
+          <text class="edge-label" x="148" y="110">HA event or simulator snapshot</text>
+          <text class="edge-label" x="338" y="162">normalized snapshot + fault/status</text>
+          <text class="edge-label" x="528" y="184">reasoner, capability, policy, finalization</text>
+          <text class="edge-label" x="548" y="270">local commit succeeds; hash chain assigned</text>
+          <text class="edge-label" x="536" y="322">publish envelope after local commit</text>
+          <text class="edge-label" x="550" y="374">deliver with signed receipt</text>
+          <text class="edge-label" x="160" y="426">REST switch.turn_on / simulator execution</text>
+          <text class="edge-label" x="338" y="478">fan state or execution fault observed</text>
+          <text class="edge-label" x="528" y="530">core-authored after-action event</text>
+
+          <rect x="470" y="190" width="300" height="64" rx="8" fill="#eaf7f8" stroke="#3b8793"></rect>
+          <text class="svg-label" x="492" y="216">No local commit, no command</text>
+          <text class="svg-small" x="492" y="238">SQLite failure returns an error and prevents IO delivery.</text>
+
+          <rect x="770" y="350" width="294" height="80" rx="8" fill="#fff2e4" stroke="#c9823f"></rect>
+          <text class="svg-label" x="792" y="378">IO pre-execution checks</text>
+          <text class="svg-small" x="792" y="400">Valid signatures, unexpired envelope, matching receipt,</text>
+          <text class="svg-small" x="792" y="418">committed decision reference, fresh idempotency key.</text>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>Decision Logic</h2>
+      <div class="two-col">
+        <div>
+          <p>
+            The deterministic V1 reasoner only treats CO2 as control-relevant.
+            Humidity and temperature are observe-only inputs. The fan actuator
+            is idempotent, so stale or unknown fan state may still allow a
+            fan on/off command when CO2 requires action.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Observation</th>
+                <th>Reasoner Outcome</th>
+                <th>Policy / Command</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>CO2 &gt; 1000 ppm, fan off</td>
+                <td><code>propose_action</code> fan on</td>
+                <td class="allow">Allow if capability grant is valid</td>
+              </tr>
+              <tr>
+                <td>CO2 &lt; 500 ppm, fan on</td>
+                <td><code>propose_action</code> fan off</td>
+                <td class="allow">Allow if capability grant is valid</td>
+              </tr>
+              <tr>
+                <td>CO2 inside 500..1000 ppm</td>
+                <td><code>no_threshold_event</code></td>
+                <td>No physical command</td>
+              </tr>
+              <tr>
+                <td>Threshold breached but fan already in requested state</td>
+                <td><code>propose_no_action</code></td>
+                <td>No command; durable no-action outcome</td>
+              </tr>
+              <tr>
+                <td>CO2 stale, malformed, missing, unavailable, or unknown</td>
+                <td><code>insufficient_fresh_data</code></td>
+                <td class="deny">Deny; record stale/no-command path</td>
+              </tr>
+              <tr>
+                <td>Unknown non-idempotent actuator state</td>
+                <td>Control request may exist</td>
+                <td class="deny">Deny blind command</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="diagram compact" aria-label="CO2 decision graph">
+          <svg viewBox="0 0 520 430" role="img">
+            <defs>
+              <marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#627386"></path>
+              </marker>
+            </defs>
+            <text class="svg-title" x="24" y="36">CO2 control rule</text>
+            <rect class="node" x="152" y="70" width="216" height="56" fill="#f4f7fa"></rect>
+            <text class="svg-label" x="190" y="103">CO2 source fresh?</text>
+
+            <rect class="node" x="36" y="172" width="178" height="64" fill="#fff0f0" stroke="#c96b62"></rect>
+            <text class="svg-label" x="62" y="198">No</text>
+            <text class="svg-small" x="62" y="218">stale deny, no command</text>
+
+            <rect class="node" x="300" y="172" width="178" height="64" fill="#eef7f8" stroke="#3b8793"></rect>
+            <text class="svg-label" x="326" y="198">Yes</text>
+            <text class="svg-small" x="326" y="218">evaluate thresholds</text>
+
+            <rect class="node" x="36" y="300" width="126" height="62" fill="#eef8f0" stroke="#5f8f68"></rect>
+            <text class="svg-label" x="66" y="324">&lt; 500</text>
+            <text class="svg-small" x="58" y="344">fan off</text>
+
+            <rect class="node" x="198" y="300" width="126" height="62" fill="#f4f7fa"></rect>
+            <text class="svg-label" x="224" y="324">500..1000</text>
+            <text class="svg-small" x="218" y="344">no action</text>
+
+            <rect class="node" x="360" y="300" width="126" height="62" fill="#eef8f0" stroke="#5f8f68"></rect>
+            <text class="svg-label" x="396" y="324">&gt; 1000</text>
+            <text class="svg-small" x="386" y="344">fan on</text>
+
+            <path d="M220 126 L132 172" class="edge" marker-end="url(#arrow3)"></path>
+            <path d="M300 126 L382 172" class="edge" marker-end="url(#arrow3)"></path>
+            <path d="M366 236 L112 300" class="edge" marker-end="url(#arrow3)"></path>
+            <path d="M388 236 L262 300" class="edge" marker-end="url(#arrow3)"></path>
+            <path d="M410 236 L422 300" class="edge" marker-end="url(#arrow3)"></path>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Contract ABI And Signed Data</h2>
+      <p>
+        <code>priv/schemas</code> is the source of truth. The generator emits
+        contract modules that provide structs, validation, canonical JSON,
+        payload hashing, signing, verification, and stable fixture/display maps.
+      </p>
+      <div class="diagram" aria-label="Contract compilation and signing pipeline">
+        <svg viewBox="0 0 1120 360" role="img">
+          <defs>
+            <marker id="arrow4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#627386"></path>
+            </marker>
+          </defs>
+          <text class="svg-title" x="36" y="42">V1 control-message ABI</text>
+          <g>
+            <rect class="node" x="50" y="110" width="180" height="96" fill="#eef8f0" stroke="#5f8f68"></rect>
+            <text class="svg-label" x="80" y="144">JSON Schema</text>
+            <text class="svg-small" x="80" y="168">schema_id</text>
+            <text class="svg-small" x="80" y="188">schema_version</text>
+
+            <rect class="node" x="292" y="110" width="190" height="96" fill="#eef8f0" stroke="#5f8f68"></rect>
+            <text class="svg-label" x="318" y="144">Generated Module</text>
+            <text class="svg-small" x="318" y="168">struct + validation</text>
+            <text class="svg-small" x="318" y="188">fixture maps</text>
+
+            <rect class="node" x="544" y="110" width="180" height="96" fill="#f4f7fa"></rect>
+            <text class="svg-label" x="576" y="144">Canonical JSON</text>
+            <text class="svg-small" x="576" y="168">sorted keys</text>
+            <text class="svg-small" x="576" y="188">no whitespace</text>
+
+            <rect class="node" x="786" y="110" width="150" height="96" fill="#f4f7fa"></rect>
+            <text class="svg-label" x="824" y="144">Hash</text>
+            <text class="svg-small" x="824" y="168">payload_hash</text>
+            <text class="svg-small" x="824" y="188">event_hash</text>
+
+            <rect class="node" x="990" y="110" width="96" height="96" fill="#f4f7fa"></rect>
+            <text class="svg-label" x="1018" y="144">HMAC</text>
+            <text class="svg-small" x="1010" y="168">signature</text>
+          </g>
+          <g stroke="#627386" stroke-width="2" marker-end="url(#arrow4)" fill="none">
+            <path d="M230 158 H292"></path>
+            <path d="M482 158 H544"></path>
+            <path d="M724 158 H786"></path>
+            <path d="M936 158 H990"></path>
+          </g>
+          <text class="svg-small" x="72" y="258">All signed payloads include format_version, schema_id, and schema_version.</text>
+          <text class="svg-small" x="72" y="282">Use the same canonicalization code for config, grants, command envelopes, ledger events, and verification.</text>
+          <text class="svg-small" x="72" y="306">Avoid floats in signed payloads; use integers, scaled integers, or strings where needed.</text>
+        </svg>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Contract</th>
+            <th>Purpose</th>
+            <th>Durable / Signed Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>NormalizedSnapshot</code></td>
+            <td>Live IO summary for room sensor and actuator state</td>
+            <td>Ephemeral stream; referenced by hash in durable decisions</td>
+          </tr>
+          <tr>
+            <td><code>ReasonerOutcome</code></td>
+            <td>Normalized result from deterministic or future pluggable reasoners</td>
+            <td>Persisted as ledger event when decision-relevant</td>
+          </tr>
+          <tr>
+            <td><code>CapabilityCheck</code></td>
+            <td>Records grant lookup and allow/deny result</td>
+            <td>First-class ledger event</td>
+          </tr>
+          <tr>
+            <td><code>PolicyDecision</code></td>
+            <td>Records policy result, reason, and capability status</td>
+            <td>Every policy decision is signed and durable</td>
+          </tr>
+          <tr>
+            <td><code>CommandEnvelope</code></td>
+            <td>Core-issued command to IO after finalized local ledger commit</td>
+            <td>Signed, expiring, idempotency-keyed command</td>
+          </tr>
+          <tr>
+            <td><code>DeliveryReceipt</code></td>
+            <td>Mailbox delivery metadata for an already-committed command</td>
+            <td>Signed mechanical receipt, not authorization</td>
+          </tr>
+          <tr>
+            <td><code>AfterActionEvent</code></td>
+            <td>Core-authored interpretation of execution result</td>
+            <td>Ledger event linked to command and observations</td>
+          </tr>
+          <tr>
+            <td><code>LedgerEvent</code></td>
+            <td>Append-only event envelope with hash-chain integrity</td>
+            <td>Authoritative decision/action record</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Core Data Structures</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Normalized Snapshot</h3>
+          <pre>{
+  format_version,
+  schema_id,
+  schema_version,
+  snapshot_id,
+  snapshot_seq,
+  snapshot_hash,
+  room_id,
+  co2_ppm,
+  humidity_percent,
+  temperature_c,
+  fan_state,
+  source_entity_ids,
+  source_observed_at,
+  source_status,
+  normalized_at,
+  freshness
+}</pre>
+        </div>
+        <div class="card">
+          <h3>Command Envelope</h3>
+          <pre>{
+  command_id,
+  idempotency_key,
+  subject,
+  target,
+  action,
+  scope,
+  requested_state,
+  snapshot_id,
+  decision_event_id,
+  reasoner_outcome_event_id,
+  capability_event_id,
+  policy_decision_id,
+  issued_at,
+  expires_at,
+  payload_hash,
+  signature
+}</pre>
+        </div>
+        <div class="card">
+          <h3>Ledger Event Envelope</h3>
+          <pre>{
+  event_id,
+  sequence,
+  event_type,
+  core_node_id,
+  consensus_decision_id,
+  consensus_status,
+  quorum_ref,
+  causation_id,
+  correlation_id,
+  subject,
+  source_app,
+  occurred_at,
+  observed_at,
+  persisted_at,
+  payload,
+  payload_hash,
+  previous_event_hash,
+  event_hash,
+  signature
+}</pre>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Ledger Integrity</h2>
+      <p>
+        Each core node stores a durable decision/action ledger in local SQLite,
+        not telemetry. Live observations remain in Home Assistant, simulator
+        streams, and future historian systems. The ledger records finalized
+        decisions, authorization facts, issued commands, relevant faults, and
+        after-action outcomes.
+      </p>
+      <div class="diagram" aria-label="Append-only ledger hash chain">
+        <svg viewBox="0 0 1120 420" role="img">
+          <defs>
+            <marker id="arrow5" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#627386"></path>
+            </marker>
+          </defs>
+          <text class="svg-title" x="36" y="42">Append-only local SQLite hash chain</text>
+          <rect class="node" x="54" y="110" width="190" height="160" fill="#f4f7fa"></rect>
+          <text class="svg-label" x="82" y="142">Sequence 1</text>
+          <text class="svg-small" x="82" y="166">ledger_genesis</text>
+          <text class="svg-small" x="82" y="190">core_node_id: core_a</text>
+          <text class="svg-small" x="82" y="210">previous: genesis-v1</text>
+          <text class="svg-small" x="82" y="238">event_hash: h1</text>
+
+          <rect class="node" x="336" y="110" width="190" height="160" fill="#eaf7f8" stroke="#3b8793"></rect>
+          <text class="svg-label" x="364" y="142">Sequence 2</text>
+          <text class="svg-small" x="364" y="166">reasoner outcome</text>
+          <text class="svg-small" x="364" y="190">single_core_finalized</text>
+          <text class="svg-small" x="364" y="214">previous: h1, payload: p2</text>
+          <text class="svg-small" x="364" y="238">event_hash: h2</text>
+
+          <rect class="node" x="618" y="110" width="190" height="160" fill="#eaf7f8" stroke="#3b8793"></rect>
+          <text class="svg-label" x="646" y="142">Sequence 3</text>
+          <text class="svg-small" x="646" y="166">policy decision</text>
+          <text class="svg-small" x="646" y="190">consensus_decision_id</text>
+          <text class="svg-small" x="646" y="214">previous: h2, payload: p3</text>
+          <text class="svg-small" x="646" y="238">event_hash: h3</text>
+
+          <rect class="node" x="900" y="110" width="190" height="160" fill="#eaf7f8" stroke="#3b8793"></rect>
+          <text class="svg-label" x="928" y="142">Sequence 4</text>
+          <text class="svg-small" x="928" y="166">command envelope</text>
+          <text class="svg-small" x="928" y="190">local commit before IO</text>
+          <text class="svg-small" x="928" y="214">previous: h3, payload: p4</text>
+          <text class="svg-small" x="928" y="238">event_hash: h4</text>
+
+          <path class="edge" d="M244 190 H336" marker-end="url(#arrow5)"></path>
+          <path class="edge" d="M526 190 H618" marker-end="url(#arrow5)"></path>
+          <path class="edge" d="M808 190 H900" marker-end="url(#arrow5)"></path>
+
+          <rect x="72" y="318" width="978" height="54" rx="8" fill="#fffdf5" stroke="#dfc578"></rect>
+          <text class="svg-label" x="94" y="348">Verification task</text>
+          <text class="svg-small" x="224" y="348">Verify node-local sequence, payload/event hashes, previous links, HMAC signatures, and consensus status.</text>
+        </svg>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Ledger Event Type</th>
+            <th>When Recorded</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>ledger_genesis</code></td><td>Before normal runtime; establishes ledger identity.</td></tr>
+          <tr><td><code>connection_status_observed</code></td><td>Core observes outside connection state changes.</td></tr>
+          <tr><td><code>io_fault_observed</code></td><td>Fault affects OODA or decision context.</td></tr>
+          <tr><td><code>reasoner_outcome_recorded</code></td><td>Reasoner produces a decision-relevant outcome.</td></tr>
+          <tr><td><code>capability_check_recorded</code></td><td>Capability grant lookup is evaluated.</td></tr>
+          <tr><td><code>policy_decision_recorded</code></td><td>Policy allows, denies, or returns a stub/noop result.</td></tr>
+          <tr><td><code>command_envelope_issued</code></td><td>Core persists command envelope before mailbox delivery.</td></tr>
+          <tr><td><code>after_action_recorded</code></td><td>Core interprets IO observations after command delivery.</td></tr>
+          <tr><td><code>stale_snapshot_denied</code></td><td>Stale or unsafe live data prevents physical command.</td></tr>
+          <tr><td><code>node_fault_observed</code></td><td>Node faults and restarts where practical.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Runtime Modes</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Home Assistant Mode</h3>
+          <p><code>EIGENFORGE_IO_MODE=home_assistant</code></p>
+          <p>Uses the Home Assistant WebSocket API for state ingest and REST API for fan commands via <code>switch.turn_on</code> and <code>switch.turn_off</code>.</p>
+          <p>Missing required Home Assistant config or HMAC secret fails startup. Unreachable Home Assistant may start degraded and retry with logarithmic backoff up to <code>EIGENFORGE_HA_RECONNECT_MAX_MS</code>.</p>
+        </div>
+        <div class="card">
+          <h3>Simulator Mode</h3>
+          <p><code>EIGENFORGE_IO_MODE=simulator</code></p>
+          <p>Uses static normalized snapshot fixtures from <code>config/simulator_snapshots</code>. It must not connect to Home Assistant, InfluxDB, ESPHome, MQTT, or other outside data sources.</p>
+          <p>Unsigned test/demo fixtures may be allowed, but decisions produced from them are signed and persisted normally.</p>
+        </div>
+        <div class="card">
+          <h3>Shared Settings</h3>
+          <p><code>EIGENFORGE_HMAC_SECRET</code> signs config, capability grants, receipts, command envelopes, and ledger events.</p>
+          <p><code>EIGENFORGE_CORE_NODE_ID</code> and <code>EIGENFORGE_CORE_DB_PATH</code> identify the local core ledger. Command envelopes expire after 5 seconds; snapshots are stale after 15 seconds.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Streams, Topics, And Projections</h2>
+      <div class="two-col">
+        <div>
+          <table>
+            <thead>
+              <tr>
+                <th>Channel / Table</th>
+                <th>Role</th>
+                <th>Authority</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>io_state:room:ROOM_ID</code></td>
+                <td>Ephemeral normalized live state stream</td>
+                <td>Not trusted by default; not persisted as telemetry</td>
+              </tr>
+              <tr>
+                <td><code>io_fault_status</code></td>
+                <td>Connection transitions, malformed observations, adapter errors</td>
+                <td>Core persists only decision-relevant observations</td>
+              </tr>
+              <tr>
+                <td><code>commands:io</code></td>
+                <td>Mailbox-delivered command envelopes</td>
+                <td>Only after finalized local ledger commit</td>
+              </tr>
+              <tr>
+                <td><code>ledger_events</code></td>
+                <td>Node-local append-only decision/action history</td>
+                <td>Hash-chained, signed, consensus-tagged</td>
+              </tr>
+              <tr>
+                <td><code>latest_room_control_state</code></td>
+                <td>Dashboard-friendly current control read model</td>
+                <td>Derived projection; rebuildable</td>
+              </tr>
+              <tr>
+                <td><code>recent_control_chains</code></td>
+                <td>Recent causal chains by correlation ID</td>
+                <td>Derived projection; local ledger wins on conflict</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Dashboard View</h3>
+          <p>The read-only dashboard displays:</p>
+          <span class="pill">IO mode</span>
+          <span class="pill">Connection status</span>
+          <span class="pill">CO2</span>
+          <span class="pill">Humidity</span>
+          <span class="pill">Temperature</span>
+          <span class="pill">Fan state</span>
+          <span class="pill">Reasoner outcome</span>
+          <span class="pill">Policy decision</span>
+          <span class="pill">Last command</span>
+          <span class="pill">After-action status</span>
+          <span class="pill">Recent ledger events</span>
+          <span class="pill">Raw IO faults</span>
+          <span class="pill">Stale sensor alerts</span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Golden Trace Acceptance Matrix</h2>
+      <p>
+        Golden traces are the executable implementation contract for the first
+        vertical slice. They use static normalized fixtures and must not depend
+        on Home Assistant.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Trace</th>
+            <th>Snapshot</th>
+            <th>Expected Chain</th>
+            <th>IO Delivery</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>CO2 high turns fan on</td>
+            <td><code>co2_ppm=1200</code>, fan off, fresh</td>
+            <td>propose fan on → capability allow → policy allow → finalized local commit → command envelope → after-action confirmed changed</td>
+            <td class="allow">Delivered after local commit</td>
+          </tr>
+          <tr>
+            <td>CO2 high, fan already on</td>
+            <td><code>co2_ppm=1200</code>, fan on, fresh</td>
+            <td>propose no-action → finalized no-action decision in local SQLite</td>
+            <td>No command</td>
+          </tr>
+          <tr>
+            <td>Stale CO2 denies action</td>
+            <td><code>co2_ppm=1200</code>, fan off, stale</td>
+            <td>insufficient fresh data → deny stale snapshot → finalized stale deny event</td>
+            <td>No command</td>
+          </tr>
+          <tr>
+            <td>Local SQLite persistence failure</td>
+            <td><code>co2_ppm=1200</code>, fan off, fresh</td>
+            <td>persistence attempted three times → <code>{:error, :ledger_persistence_failed}</code></td>
+            <td class="deny">Never delivered</td>
+          </tr>
+        </tbody>
+      </table>
+      <pre>mix eigenforge.trace.run \
+  --fixture config/simulator_snapshots/co2_high_fan_off.json \
+  --out tmp/traces/co2_high_fan_off.json
+
+mix eigenforge.trace.verify \
+  --trace test/golden_traces/co2_high_fan_off.json</pre>
+    </section>
+
+    <section>
+      <h2>Build Slices And Deferrals</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>First Build Slice</h3>
+          <span class="pill">umbrella scaffolding</span>
+          <span class="pill">contracts</span>
+          <span class="pill">canonical JSON</span>
+          <span class="pill">hash/signature rules</span>
+          <span class="pill">fixed event types</span>
+          <span class="pill">genesis event</span>
+          <span class="pill">local SQLite ledger</span>
+          <span class="pill">single-core finalization</span>
+          <span class="pill">reasoner</span>
+          <span class="pill">capability check</span>
+          <span class="pill">policy decision</span>
+          <span class="pill">command envelope</span>
+          <span class="pill">delivery receipt</span>
+          <span class="pill">golden trace runner</span>
+          <span class="pill">first three fixtures</span>
+        </div>
+        <div class="card">
+          <h3>After Simulator Slice</h3>
+          <span class="pill">HA reconnect behavior</span>
+          <span class="pill">LiveView dashboard</span>
+          <span class="pill">quorum catch-up</span>
+          <span class="pill">SQLite hardening</span>
+          <span class="pill">node fault events</span>
+          <span class="pill">IO log rotation</span>
+          <span class="pill">non-fan actuator stubs</span>
+        </div>
+        <div class="card">
+          <h3>V2 / V3 Direction</h3>
+          <span class="pill">three core nodes</span>
+          <span class="pill">2-of-3 voting</span>
+          <span class="pill">rotating finalizer</span>
+          <span class="pill">network split safety</span>
+          <span class="pill">local ledger catch-up</span>
+          <span class="pill">single command envelope</span>
+          <span class="pill">quorum signatures</span>
+          <span class="pill">sensor signatures</span>
+          <span class="pill">external anchoring</span>
+          <span class="pill">LLM reasoners</span>
+          <span class="pill">manual dashboard intents</span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Implementation Invariants</h2>
+      <div class="note">
+        These are the design constraints that should survive refactors and V2 migration.
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Invariant</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Core finalizes and persists before command delivery</td>
+            <td>Durable authority must exist before the outside world changes.</td>
+          </tr>
+          <tr>
+            <td>Mailbox routes but does not authorize</td>
+            <td>Delivery must not silently become a second policy path.</td>
+          </tr>
+          <tr>
+            <td>IO verifies envelope and receipt before execution</td>
+            <td>Execution boundary rejects invalid, expired, duplicate, or uncommitted commands.</td>
+          </tr>
+          <tr>
+            <td>After-action truth is authored by core</td>
+            <td>IO reports observations and faults; core interprets them in the OODA loop.</td>
+          </tr>
+          <tr>
+            <td>Ledger is authoritative; projections are rebuildable</td>
+            <td>Local read models can be convenient without becoming control authority.</td>
+          </tr>
+          <tr>
+            <td>Non-quorum partitions cannot command</td>
+            <td>Network splits must not create competing actuator decisions.</td>
+          </tr>
+          <tr>
+            <td>Signed payloads declare format and schema identity</td>
+            <td>V1 remains inspectable while leaving room for future encoding formats.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

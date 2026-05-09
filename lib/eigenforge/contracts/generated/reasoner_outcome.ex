@@ -10,26 +10,63 @@ defmodule Eigenforge.Contracts.ReasonerOutcome do
   @schema_id "eigenforge.reasoner_outcome"
   @schema_version 1
   @format_version "json-canonical-v1"
-  @fields [:confidence_bps, :format_version, :metadata, :outcome_type, :reason, :reasoner_id, :reasoner_version, :requested_state, :schema_id, :schema_version, :snapshot_hash, :snapshot_id, :target]
-  @required_fields [:format_version, :schema_id, :schema_version, :reasoner_id, :reasoner_version, :snapshot_id, :snapshot_hash, :outcome_type, :reason, :confidence_bps]
-  @field_types [confidence_bps: :integer, format_version: :string, metadata: :object, outcome_type: :string, reason: :string, reasoner_id: :string, reasoner_version: :string, requested_state: :string, schema_id: :string, schema_version: :integer, snapshot_hash: :string, snapshot_id: :string, target: :string]
+  @fields [
+    :confidence_bps,
+    :format_version,
+    :metadata,
+    :outcome_type,
+    :reason,
+    :reasoner_id,
+    :reasoner_version,
+    :requested_state,
+    :schema_id,
+    :schema_version,
+    :snapshot_hash,
+    :snapshot_id,
+    :target
+  ]
+  @required_fields [
+    :format_version,
+    :schema_id,
+    :schema_version,
+    :reasoner_id,
+    :reasoner_version,
+    :snapshot_id,
+    :snapshot_hash,
+    :outcome_type,
+    :reason,
+    :confidence_bps
+  ]
+  @field_types [
+    confidence_bps: :integer,
+    format_version: :string,
+    metadata: :object,
+    outcome_type: :string,
+    reason: :string,
+    reasoner_id: :string,
+    reasoner_version: :string,
+    requested_state: :string,
+    schema_id: :string,
+    schema_version: :integer,
+    snapshot_hash: :string,
+    snapshot_id: :string,
+    target: :string
+  ]
 
   @enforce_keys []
-  defstruct [
-    confidence_bps: nil,
-    format_version: nil,
-    metadata: nil,
-    outcome_type: nil,
-    reason: nil,
-    reasoner_id: nil,
-    reasoner_version: nil,
-    requested_state: nil,
-    schema_id: nil,
-    schema_version: nil,
-    snapshot_hash: nil,
-    snapshot_id: nil,
-    target: nil
-  ]
+  defstruct confidence_bps: nil,
+            format_version: nil,
+            metadata: nil,
+            outcome_type: nil,
+            reason: nil,
+            reasoner_id: nil,
+            reasoner_version: nil,
+            requested_state: nil,
+            schema_id: nil,
+            schema_version: nil,
+            snapshot_hash: nil,
+            snapshot_id: nil,
+            target: nil
 
   @type t :: %__MODULE__{
           confidence_bps: integer() | nil,
@@ -61,5 +98,7 @@ defmodule Eigenforge.Contracts.ReasonerOutcome do
   def canonical_json(value), do: Eigenforge.Contracts.canonical_json(signable_map(value))
   def payload_hash(value), do: Eigenforge.Contracts.payload_hash(value)
   def sign_hmac(value, secret), do: Eigenforge.Contracts.sign_hmac(value, secret)
-  def verify_hmac(value, secret, signature), do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
+
+  def verify_hmac(value, secret, signature),
+    do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
 end

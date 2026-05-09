@@ -10,23 +10,52 @@ defmodule Eigenforge.Contracts.IoFaultStatusEvent do
   @schema_id "eigenforge.io_fault_status_event"
   @schema_version 1
   @format_version "json-canonical-v1"
-  @fields [:event_id, :format_version, :message, :metadata, :observed_at, :room_id, :schema_id, :schema_version, :source, :status]
-  @required_fields [:format_version, :schema_id, :schema_version, :event_id, :room_id, :source, :status, :observed_at]
-  @field_types [event_id: :string, format_version: :string, message: :string, metadata: :object, observed_at: :string, room_id: :string, schema_id: :string, schema_version: :integer, source: :string, status: :string]
+  @fields [
+    :event_id,
+    :format_version,
+    :message,
+    :metadata,
+    :observed_at,
+    :room_id,
+    :schema_id,
+    :schema_version,
+    :source,
+    :status
+  ]
+  @required_fields [
+    :format_version,
+    :schema_id,
+    :schema_version,
+    :event_id,
+    :room_id,
+    :source,
+    :status,
+    :observed_at
+  ]
+  @field_types [
+    event_id: :string,
+    format_version: :string,
+    message: :string,
+    metadata: :object,
+    observed_at: :string,
+    room_id: :string,
+    schema_id: :string,
+    schema_version: :integer,
+    source: :string,
+    status: :string
+  ]
 
   @enforce_keys []
-  defstruct [
-    event_id: nil,
-    format_version: nil,
-    message: nil,
-    metadata: nil,
-    observed_at: nil,
-    room_id: nil,
-    schema_id: nil,
-    schema_version: nil,
-    source: nil,
-    status: nil
-  ]
+  defstruct event_id: nil,
+            format_version: nil,
+            message: nil,
+            metadata: nil,
+            observed_at: nil,
+            room_id: nil,
+            schema_id: nil,
+            schema_version: nil,
+            source: nil,
+            status: nil
 
   @type t :: %__MODULE__{
           event_id: String.t() | nil,
@@ -55,5 +84,7 @@ defmodule Eigenforge.Contracts.IoFaultStatusEvent do
   def canonical_json(value), do: Eigenforge.Contracts.canonical_json(signable_map(value))
   def payload_hash(value), do: Eigenforge.Contracts.payload_hash(value)
   def sign_hmac(value, secret), do: Eigenforge.Contracts.sign_hmac(value, secret)
-  def verify_hmac(value, secret, signature), do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
+
+  def verify_hmac(value, secret, signature),
+    do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
 end

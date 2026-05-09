@@ -10,31 +10,84 @@ defmodule Eigenforge.Contracts.PolicyDecision do
   @schema_id "eigenforge.policy_decision"
   @schema_version 1
   @format_version "json-canonical-v1"
-  @fields [:action, :capability_grant_id, :capability_status, :decided_at, :decision, :format_version, :metadata, :policy_decision_id, :reason, :reasoner_outcome_id, :requested_state, :schema_id, :schema_version, :scope, :snapshot_hash, :snapshot_id, :subject, :target]
-  @required_fields [:format_version, :schema_id, :schema_version, :policy_decision_id, :snapshot_id, :snapshot_hash, :reasoner_outcome_id, :subject, :target, :action, :scope, :decision, :capability_status, :reason, :decided_at, :metadata]
-  @field_types [action: :string, capability_grant_id: :string, capability_status: :string, decided_at: :string, decision: :string, format_version: :string, metadata: :object, policy_decision_id: :string, reason: :string, reasoner_outcome_id: :string, requested_state: :string, schema_id: :string, schema_version: :integer, scope: :string, snapshot_hash: :string, snapshot_id: :string, subject: :string, target: :string]
+  @fields [
+    :action,
+    :capability_grant_id,
+    :capability_status,
+    :decided_at,
+    :decision,
+    :format_version,
+    :metadata,
+    :policy_decision_id,
+    :reason,
+    :reasoner_outcome_id,
+    :requested_state,
+    :schema_id,
+    :schema_version,
+    :scope,
+    :snapshot_hash,
+    :snapshot_id,
+    :subject,
+    :target
+  ]
+  @required_fields [
+    :format_version,
+    :schema_id,
+    :schema_version,
+    :policy_decision_id,
+    :snapshot_id,
+    :snapshot_hash,
+    :reasoner_outcome_id,
+    :subject,
+    :target,
+    :action,
+    :scope,
+    :decision,
+    :capability_status,
+    :reason,
+    :decided_at,
+    :metadata
+  ]
+  @field_types [
+    action: :string,
+    capability_grant_id: :string,
+    capability_status: :string,
+    decided_at: :string,
+    decision: :string,
+    format_version: :string,
+    metadata: :object,
+    policy_decision_id: :string,
+    reason: :string,
+    reasoner_outcome_id: :string,
+    requested_state: :string,
+    schema_id: :string,
+    schema_version: :integer,
+    scope: :string,
+    snapshot_hash: :string,
+    snapshot_id: :string,
+    subject: :string,
+    target: :string
+  ]
 
   @enforce_keys []
-  defstruct [
-    action: nil,
-    capability_grant_id: nil,
-    capability_status: nil,
-    decided_at: nil,
-    decision: nil,
-    format_version: nil,
-    metadata: nil,
-    policy_decision_id: nil,
-    reason: nil,
-    reasoner_outcome_id: nil,
-    requested_state: nil,
-    schema_id: nil,
-    schema_version: nil,
-    scope: nil,
-    snapshot_hash: nil,
-    snapshot_id: nil,
-    subject: nil,
-    target: nil
-  ]
+  defstruct action: nil,
+            capability_grant_id: nil,
+            capability_status: nil,
+            decided_at: nil,
+            decision: nil,
+            format_version: nil,
+            metadata: nil,
+            policy_decision_id: nil,
+            reason: nil,
+            reasoner_outcome_id: nil,
+            requested_state: nil,
+            schema_id: nil,
+            schema_version: nil,
+            scope: nil,
+            snapshot_hash: nil,
+            snapshot_id: nil,
+            subject: nil,
+            target: nil
 
   @type t :: %__MODULE__{
           action: String.t() | nil,
@@ -71,5 +124,7 @@ defmodule Eigenforge.Contracts.PolicyDecision do
   def canonical_json(value), do: Eigenforge.Contracts.canonical_json(signable_map(value))
   def payload_hash(value), do: Eigenforge.Contracts.payload_hash(value)
   def sign_hmac(value, secret), do: Eigenforge.Contracts.sign_hmac(value, secret)
-  def verify_hmac(value, secret, signature), do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
+
+  def verify_hmac(value, secret, signature),
+    do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
 end

@@ -10,6 +10,8 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "reasoner_outcome") == "propose_action"
     assert step(trace, "capability_check") == "allow"
     assert step(trace, "policy_decision") == "allow"
+    assert step(trace, "finalized_decision") == "single_core_finalized"
+    assert step(trace, "local_ledger_commit") == "committed"
     assert step(trace, "command_envelope") == "issued"
     assert step(trace, "delivery_receipt") == "issued"
     assert step(trace, "after_action") == "confirmed_changed"
@@ -17,6 +19,7 @@ defmodule Eigenforge.TraceTest do
     assert [%{"requested_state" => "on"}] = trace["command_envelopes"]
     assert [%{"status" => "confirmed_changed", "observed_state" => "on"}] = trace["after_actions"]
     assert Enum.any?(trace["ledger_events"], &(&1["event_type"] == "command_envelope_issued"))
+    assert_local_sqlite_consensus(trace)
   end
 
   test "CO2 high with fan already on records no-action and no command" do
@@ -24,11 +27,14 @@ defmodule Eigenforge.TraceTest do
 
     assert step(trace, "reasoner_outcome") == "propose_no_action"
     assert step(trace, "policy_decision") == "allow"
+    assert step(trace, "finalized_decision") == "single_core_finalized"
+    assert step(trace, "local_ledger_commit") == "committed"
     assert step(trace, "command_envelope") == "not_delivered"
 
     assert trace["command_envelopes"] == []
     assert trace["delivery_receipts"] == []
     refute Enum.any?(trace["ledger_events"], &(&1["event_type"] == "command_envelope_issued"))
+    assert_local_sqlite_consensus(trace)
   end
 
   test "stale CO2 denies action and records stale deny event" do
@@ -36,10 +42,13 @@ defmodule Eigenforge.TraceTest do
 
     assert step(trace, "reasoner_outcome") == "insufficient_fresh_data"
     assert step(trace, "policy_decision") == "deny_stale_snapshot"
+    assert step(trace, "finalized_decision") == "single_core_finalized"
+    assert step(trace, "local_ledger_commit") == "committed"
     assert step(trace, "command_envelope") == "not_delivered"
 
     assert trace["command_envelopes"] == []
     assert Enum.any?(trace["ledger_events"], &(&1["event_type"] == "stale_snapshot_denied"))
+    assert_local_sqlite_consensus(trace)
   end
 
   test "committed golden traces verify" do
@@ -62,5 +71,26 @@ defmodule Eigenforge.TraceTest do
     trace["steps"]
     |> Enum.find(&(&1["name"] == name))
     |> Map.fetch!("result")
+  end
+
+  defp assert_local_sqlite_consensus(trace) do
+    assert trace["core_node_id"] == "core_a"
+    assert trace["ledger_backend"] == "local_sqlite"
+    assert trace["consensus_status"] == "single_core_finalized"
+    assert trace["verification"]["local_ledger_committed"]
+    assert trace["verification"]["consensus_status_valid"]
+
+    consensus_ids =
+      trace["ledger_events"]
+      |> Enum.map(& &1["consensus_decision_id"])
+      |> Enum.uniq()
+
+    assert [_one_consensus_decision] = consensus_ids
+
+    assert Enum.all?(trace["ledger_events"], fn event ->
+             event["core_node_id"] == "core_a" and
+               event["consensus_status"] == "single_core_finalized" and
+               event["quorum_ref"] == %{}
+           end)
   end
 end

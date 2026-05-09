@@ -2,14 +2,16 @@
 
 ## 1. Scope And Non-Goals
 
-V1 proves the input/output control loop before adding V2 voting and quorum.
-The goal is a small, inspectable control path:
+V1 proves the input/output control loop while keeping the data model compatible
+with later multi-core voting and quorum. The goal is a small, inspectable
+control path:
 
 ```text
 outside world
   -> IO live observation
   -> core OODA loop
-  -> durable decision/action ledger
+  -> consensus/finalization boundary
+  -> local core decision ledger
   -> signed command envelope
   -> IO execution
   -> core-authored after-action event
@@ -28,8 +30,8 @@ V1 covers:
 - A pluggable reasoner interface with a deterministic rules reasoner.
 - Plain Elixir policy checks.
 - Signed command envelopes.
-- A signed, hash-chained, append-only durable decision/action ledger in
-  Postgres.
+- A signed, hash-chained, append-only local SQLite decision/action ledger for
+  each core node.
 - Live IO streams over Phoenix PubSub.
 - A read-only Phoenix LiveView dashboard.
 - Core logic tests, a golden trace runner, and golden trace acceptance tests
@@ -48,8 +50,10 @@ V1 does not implement:
 - external ledger anchoring;
 - log rotation for IO debug files.
 
-The V1 code should avoid shortcuts that make V2 quorum hard, but V1 has one
-effective core decision path.
+The V1 code should avoid shortcuts that make V2 quorum hard. V1 has one
+effective core decision path and treats the single core as a one-member
+consensus group, so the persistence boundary is the same shape as the later
+post-quorum boundary.
 
 ### Implementation Order
 
@@ -60,7 +64,8 @@ simulator snapshot
   -> core reasoner
   -> capability check
   -> policy decision
-  -> durable ledger event or events
+  -> finalized decision/action
+  -> local SQLite ledger event or events
   -> command envelope where applicable
   -> delivery receipt where applicable
   -> simulated IO execution where applicable
@@ -105,17 +110,18 @@ eigenforge_umbrella
 - Verifies command envelope signature, expiry, and idempotency before
   execution.
 - Executes valid command envelopes through the configured adapter.
-- Does not decide, evaluate policy, write to Postgres, or author after-action
-  truth.
+- Does not decide, evaluate policy, write to core SQLite ledgers, or author
+  after-action truth.
 
 `eigenforge_core` owns the OODA loop and authority.
 
 - Subscribes to the live IO stream and IO fault/status stream.
 - Validates live input shape, freshness, and decision relevance.
 - Runs the reasoner, capability checks, policy checks, and actuator-state gate.
-- Persists durable decision/action ledger records.
-- Persists a decision/action record before any command is sent to IO.
-- Issues signed command envelopes after ledger commit.
+- Finalizes decisions through the configured consensus boundary.
+- Persists finalized decision/action ledger records to the local SQLite ledger.
+- Persists a finalized decision/action record before any command is sent to IO.
+- Issues signed command envelopes after local ledger commit.
 - Observes IO state/faults after command delivery and records after-action
   events.
 
@@ -127,7 +133,7 @@ eigenforge_umbrella
 - Maintains read projections only as mechanical read models over committed
   ledger records; projections do not grant authority or reinterpret events.
 - Delivers command envelopes to IO through the mailbox boundary only after the
-  corresponding ledger commit.
+  corresponding local ledger commit.
 - May read envelope identifiers required for routing, projection, and delivery
   receipts.
 - Does not validate signatures, evaluate policy, decide authorization, change
@@ -139,6 +145,38 @@ eigenforge_umbrella
 - Subscribes to live IO streams for current state and fault/status display.
 - Reads durable decision/action history and projections.
 - Does not mutate system state, issue manual commands, or call Home Assistant.
+
+### Core Consensus And Persistence Model
+
+Each core node owns a local SQLite database. Core persistence is for finalized
+control facts only: reasoner outcomes, capability checks, policy decisions,
+issued command envelopes, relevant IO faults, and after-action events. Core
+does not store bulk sensor telemetry or actuator state history.
+
+V1 runs with one effective core node. That node is treated as a one-member
+consensus group: once the deterministic OODA path reaches a final decision, the
+node persists the finalized decision/action events to its local SQLite ledger
+before any command envelope is delivered to IO.
+
+V2 replaces the one-member finalization boundary with three core nodes and
+2-of-3 quorum. After quorum, each participating core node persists the
+finalized action chain to its own local SQLite ledger. A node that did not
+participate in quorum must not independently issue a command from stale local
+state; it must append local catch-up evidence for signed finalized decisions
+before it can act as a command finalizer.
+
+Network split rule:
+
+- a partition with quorum may finalize and persist decisions locally on the
+  participating core nodes;
+- a partition without quorum may continue observing IO and preparing local
+  proposals, but it must not finalize, persist action-authorizing decisions, or
+  issue command envelopes;
+- when a partition heals, nodes compare signed finalized decisions by
+  `consensus_decision_id`, `correlation_id`, idempotency key, and quorum
+  evidence before appending local catch-up records;
+- IO executes at most one command for a finalized decision because command
+  envelopes carry idempotency keys and references to finalized ledger events.
 
 ### Suggested OTP Process Layout
 
@@ -181,7 +219,7 @@ eigenforge_mailbox
   Mailbox.Supervisor
   Mailbox.ChannelManager
   Mailbox.CommandPublisher
-  Mailbox.PostgresNotifier
+  Mailbox.LedgerNotifier
   Mailbox.Projections
 
 eigenforge_dashboard
@@ -267,6 +305,8 @@ EIGENFORGE_AFTER_ACTION_TIMEOUT_MS=3000
 EIGENFORGE_IO_MODE=home_assistant
 EIGENFORGE_HA_RECONNECT_MAX_MS=180000
 EIGENFORGE_IO_FAULT_STATUS_LOG=log/io_fault_status.log
+EIGENFORGE_CORE_NODE_ID=core_a
+EIGENFORGE_CORE_DB_PATH=var/core/core_a.sqlite3
 ```
 
 In `home_assistant` mode, the app must fail fast if required Home Assistant
@@ -535,7 +575,7 @@ application-level signatures from sensors and actuators.
 ## 6. Live IO Streams
 
 The live IO stream is the current Home Assistant or simulator sensor/actuator
-state stream. It is not persisted to Postgres as a historian.
+state stream. It is not persisted to core SQLite as a historian.
 
 IO publishes normalized snapshots over Phoenix PubSub. Suggested topics:
 
@@ -656,9 +696,9 @@ persists the fault only when it affects OODA or decision context. Malformed or
 missing CO2 causes a stale/deny/no-command path. Malformed humidity or
 temperature is dashboard/fault context only in V1.
 
-The IO fault/status stream is ephemeral. IO must not write it to Postgres.
-Core observes the stream and persists connection/fault events when they affect
-OODA or decision context.
+The IO fault/status stream is ephemeral. IO must not write it to core SQLite.
+Core observes the stream and persists connection/fault events to its local
+decision ledger only when they affect OODA or decision context.
 
 All outside connection state transitions affect the OODA loop and must be
 persisted by core after observation. This includes:
@@ -953,19 +993,25 @@ signature
 
 Command envelopes are signed with `EIGENFORGE_HMAC_SECRET`.
 
-Core must persist the corresponding decision/action ledger record before any
-command is sent to IO. If Postgres persistence fails, the core ledger writer
-retries the failed insert three times. If all attempts fail, it returns
+Core must finalize and persist the corresponding decision/action ledger record
+before any command is sent to IO. In V1, finalization is the one-member core
+decision. In V2, finalization requires quorum evidence.
+
+If local SQLite persistence fails, the core ledger writer retries the failed
+transaction three times. If all attempts fail, it returns
 `{:error, :ledger_persistence_failed}` to callers and the runtime process
 responsible for command issuance raises. No command is delivered after failed
 persistence. Golden traces and tests assert the error result and no IO command
 delivery; they do not need to crash the VM.
 
-V1 assumes persistence is reliable once Postgres accepts the ledger record.
-V2/V3 revisit this.
+V1 assumes persistence is reliable once SQLite commits the local ledger
+transaction. V2 requires each quorum participant to persist the finalized
+decision to its own SQLite ledger; a finalizer must not issue the command until
+its own local commit succeeds.
 
 Command delivery to IO uses Phoenix PubSub through the mailbox boundary after
-ledger commit. The mailbox publishes to an explicit command topic such as:
+local ledger commit. The mailbox publishes to an explicit command topic such
+as:
 
 ```text
 commands:io
@@ -1013,7 +1059,7 @@ Before execution, IO verifies:
   committed;
 - `idempotency_key` has not already been executed.
 
-IO does not connect directly to Postgres in V1.
+IO does not connect directly to any core SQLite database in V1.
 
 ## 10. After-Action Observation
 
@@ -1028,8 +1074,8 @@ Expected action chain:
 
 1. IO publishes a live snapshot showing CO2 above the fan-on threshold.
 2. Core decides to request fan activation.
-3. Core persists the decision and command envelope to the durable
-   decision/action ledger.
+3. Core finalizes the decision and persists the command envelope to its local
+   SQLite decision/action ledger.
 4. The command envelope is delivered to IO through the mailbox boundary.
 5. IO sends the command to the Home Assistant or simulator fan adapter.
 6. IO continues publishing live actuator state changes and IO fault/status
@@ -1073,19 +1119,28 @@ based on observed live state and IO fault/status events. IO execution errors
 caught locally are published on the IO fault/status stream for core to observe
 and record where relevant.
 
-## 11. Durable Ledger And Integrity
+## 11. Local Core Ledger And Integrity
 
-Postgres is the durable decision/action ledger. It is not the sensor historian.
+Each core node has a local SQLite database that stores its durable
+decision/action ledger. The ledger is not the sensor historian.
 
 Do not persist the live stream of sensor observations or routine normalized
-snapshots to Postgres. Home Assistant and InfluxDB own live and historical
+snapshots to core SQLite. Home Assistant and InfluxDB own live and historical
 sensor telemetry. InfluxDB access is deferred and only for later history,
-diagnostics, or charting.
+diagnostics, or charting. Core only stores the OODA decisions and control facts
+needed to explain and verify actions over time.
 
-The durable decision/action ledger records what core decided, which live state
-summary or hash it used, which capability and policy checks allowed or denied
-the action, which command envelope was issued, what relevant IO faults or state
-changes core observed afterward, and what after-action status core recorded.
+The local decision/action ledger records what a core node finalized, which live
+state summary or hash it used, which capability and policy checks allowed or
+denied the action, which command envelope was issued, what relevant IO faults
+or state changes core observed afterward, and what after-action status core
+recorded.
+
+In V1, the single core node finalizes its own decision before local persistence.
+In V2, a ledger row that authorizes action must reference quorum evidence for a
+finalized consensus decision. A node on the non-quorum side of a network split
+may keep volatile observations and candidate proposals, but it must not persist
+action-authorizing ledger events or issue command envelopes.
 
 ### Ledger Event Envelope
 
@@ -1095,6 +1150,10 @@ Persist durable events with this envelope:
 event_id
 sequence
 event_type
+core_node_id
+consensus_decision_id
+consensus_status
+quorum_ref
 causation_id
 correlation_id
 subject
@@ -1110,8 +1169,12 @@ signature_version
 signature
 ```
 
-`event_id` is globally unique. `sequence` is assigned by the ledger insert
-path. `causation_id` points to the event that directly caused this event.
+`event_id` is globally unique. `sequence` is assigned by the local SQLite
+ledger insert path for one core node. `core_node_id` identifies the writer.
+`consensus_decision_id` identifies the finalized decision across core nodes.
+`consensus_status` is `single_core_finalized` in V1 and `quorum_finalized` in
+V2. `quorum_ref` is empty in V1 and points to quorum evidence in V2.
+`causation_id` points to the event that directly caused this event.
 `correlation_id` groups the full causal chain. `payload` contains an
 event-type-specific signed JSON payload with `format_version`, `schema_id`,
 and `schema_version`.
@@ -1150,13 +1213,19 @@ node_fault_observed
 
 The ledger writer rejects unknown event types.
 
+V2 may add explicit proposal, vote, quorum certificate, catch-up, and
+partition-status event types, but action-authorizing events must still use the
+same finalized command path.
+
 ### Hash Chain
 
-Ledger requirements:
+Local ledger requirements:
 
 - events are append-only;
 - normal application code cannot update or delete existing ledger rows;
 - every event is signed with HMAC-SHA256;
+- every event records `core_node_id`;
+- every action-authorizing event records a finalized `consensus_decision_id`;
 - every event stores its canonical `payload_hash`;
 - every event includes `previous_event_hash`;
 - `payload_hash` covers `payload` only;
@@ -1166,7 +1235,8 @@ Ledger requirements:
   excluding `signature`;
 - projection tables are derived and can be rebuilt from the ledger.
 
-The ledger starts with a signed genesis event created before normal runtime:
+Each local core ledger starts with a signed genesis event created before normal
+runtime:
 
 ```text
 mix eigenforge.ledger.genesis
@@ -1187,6 +1257,7 @@ format_version
 schema_id
 schema_version
 ledger_id
+core_node_id
 created_at
 genesis_reason
 app_version
@@ -1196,39 +1267,43 @@ Runtime startup must verify the genesis event before appending later events.
 Event `2` and later set `previous_event_hash` to the previous row's
 `event_hash`.
 
-The ledger insert path should run in a transaction that:
+The local SQLite ledger insert path should run in a transaction that:
 
-1. Locks the current ledger tail.
+1. Begins an immediate write transaction.
 2. Reads the latest `event_hash`.
 3. Assigns the next `sequence`.
 4. Computes `previous_event_hash`, `payload_hash`, and `event_hash`.
 5. Inserts the event.
-6. Updates projections.
+6. Updates separate projection tables derived from the inserted event.
 7. Commits.
 
-A single writer process is acceptable for V1. PostgreSQL advisory locks or row
-locks may be used to prevent concurrent writers from claiming the same ledger
-tail.
+A single writer process per core node is required. SQLite must run in WAL mode
+for local read concurrency, but ledger appends still go through one writer so
+two runtime processes cannot claim the same local ledger tail.
 
 Database constraints should support:
 
 - unique monotonic `sequence`;
 - unique `event_id`;
 - unique `event_hash`;
+- required `core_node_id`;
+- required `consensus_status`;
 - required `previous_event_hash`;
 - required `payload_hash`;
 - required `signature`;
 - sequence `1` must be `ledger_genesis`;
 - sequence `1` must use
   `previous_event_hash=eigenforge-ledger-genesis-v1`;
-- runtime application roles without update/delete/truncate permissions on
-  ledger rows.
+- no runtime code path for updating, deleting, replacing, resequencing, or
+  backfilling ledger rows.
 
-V1 enforces append-only ledger behavior with a dedicated runtime database role
-that has `SELECT` and `INSERT` only, with no `UPDATE`, `DELETE`, or `TRUNCATE`.
-The table also uses `UPDATE` and `DELETE` rejection triggers as defense in
-depth. Ledger immutability is verified cryptographically by the hash chain and
-HMAC verifier; database permissions prevent ordinary runtime mutation.
+V1 enforces append-only ledger behavior with application code, SQLite triggers
+that reject `UPDATE` and `DELETE` on ledger rows, and cryptographic
+verification. Ledger writes must use plain inserts only. Runtime code must not
+use `INSERT OR REPLACE`, `ON CONFLICT DO UPDATE`, table rebuild/swap flows, or
+catch-up paths that rewrite existing ledger rows. File permissions and process
+boundaries should keep each local database writable only by its owning core
+node runtime.
 
 Implement HMAC/hash calculation in application code so the writer and
 verification task use the same canonical rules.
@@ -1236,8 +1311,12 @@ verification task use the same canonical rules.
 ### Projections And Notifications
 
 The append-only ledger table is authoritative. Projection tables are
-convenience read models only. If a projection disagrees with the ledger, the
-ledger wins and the projection should be rebuilt.
+convenience read models only. If a local projection disagrees with the local
+ledger, the ledger wins and the projection should be rebuilt.
+
+Projection rows may be updated, deleted, or rebuilt because they are not the
+ledger. Those mutations must never modify `ledger_events`, change local ledger
+sequence numbers, or alter any previous ledger hash.
 
 Minimal tables:
 
@@ -1282,11 +1361,51 @@ after_action_status
 updated_at
 ```
 
-Use PostgreSQL `LISTEN`/`NOTIFY` only as a wakeup mechanism for predefined
-decision/action subscriptions and dashboard updates. Notifications should
-carry lightweight identifiers such as `event_id`, `event_type`, or projection
-names. Consumers re-read from Postgres instead of treating notification payloads
-as authoritative history.
+Use local PubSub/process notifications only as wakeups for predefined
+decision/action subscriptions and dashboard updates. Notifications should carry
+lightweight identifiers such as `core_node_id`, `event_id`, `event_type`, or
+projection names. Consumers re-read from the local SQLite ledger or projection
+tables instead of treating notification payloads as authoritative history.
+
+### Multi-Core Catch-Up And Network Splits
+
+V2 quorum decisions are durable only after a node has verified quorum evidence
+and committed the finalized event chain to its own local ledger. A quorum
+certificate should include:
+
+```text
+consensus_decision_id
+snapshot_id
+snapshot_hash
+proposed_action_or_no_action
+supporting_core_node_ids
+supporting_vote_ids
+supporting_vote_hashes
+finalizer_core_node_id
+finalized_at
+```
+
+Catch-up is append-only. A lagging node must not copy foreign ledger rows into
+its own `ledger_events` table, preserve a foreign `sequence`, reuse a foreign
+`event_hash` as its own event hash, or splice missing records into the middle
+of its local chain. Instead, it appends one or more local catch-up events whose
+payload contains or references the signed finalized decision, supporting vote
+hashes, foreign node ids, and any foreign event hashes as evidence. The local
+catch-up event receives the next local `sequence`, points `previous_event_hash`
+at the node's own ledger tail, and computes a new local `event_hash`.
+
+Split-brain safety rules:
+
+- a 2-of-3 partition may finalize decisions;
+- a 1-of-3 partition may observe, reason, and prepare unsigned or
+  non-authorizing local diagnostics, but it must not finalize commands;
+- after healing, a lagging node appends local catch-up events only for signed
+  finalized decisions with valid quorum evidence;
+- if two finalized decisions claim the same `consensus_decision_id` or
+  `idempotency_key`, verification fails and IO must reject any later duplicate
+  command envelope;
+- local ledger sequence numbers are node-local and must not be compared across
+  nodes as global order.
 
 ### Verification
 
@@ -1298,12 +1417,17 @@ mix eigenforge.ledger.verify
 
 The task should:
 
-1. Read ledger events in `sequence` order.
+1. Read one local core ledger in `sequence` order.
 2. Recompute each payload hash.
 3. Recompute each event hash.
 4. Verify each `previous_event_hash` link.
 5. Verify each HMAC signature.
-6. Report the first broken sequence, hash, or signature.
+6. Verify finalized action events have the expected V1/V2 consensus status.
+7. Verify local sequence numbers are contiguous and node-local.
+8. Verify catch-up events append to the local chain instead of reusing foreign
+   sequence numbers or foreign event hashes as local event hashes.
+9. Report the first broken sequence, hash, signature, append-only, or
+   consensus reference.
 
 ## 12. Dashboard
 
@@ -1326,8 +1450,8 @@ The dashboard is read-only and should show:
 - stale sensor alert status.
 
 The dashboard reads current state from live IO streams and durable history from
-Postgres-backed read models. It does not call Home Assistant, write Postgres,
-or issue commands in V1.
+local SQLite-backed read models. It does not call Home Assistant, write core
+SQLite ledgers, or issue commands in V1.
 
 ## 13. Test Rigs And Golden Traces
 
@@ -1391,7 +1515,8 @@ normalized snapshot
   -> reasoner outcome
   -> capability result
   -> policy decision
-  -> durable ledger event or events
+  -> finalized decision/action
+  -> local SQLite ledger event or events
   -> command envelope or no-command result
   -> simulated IO observation or IO fault/status event
   -> core-authored after-action event where applicable
@@ -1446,7 +1571,7 @@ where practical. Adapter interaction is simulated only at the IO boundary.
 The runner should make V2 migration straightforward: later traces can replace
 the single core decision step with three ordered core proposals, 2-of-3 voting,
 a rotating finalizer, and one final command envelope while preserving the same
-fixture-to-ledger verification shape.
+fixture-to-local-ledger verification shape.
 
 ### Golden Trace Acceptance Tests
 
@@ -1460,8 +1585,8 @@ snapshot: co2_ppm=1200, fan_state=off, freshness=fresh
 reasoner outcome: propose_action fan on
 capability check: allow
 policy decision: allow
-ledger: command envelope persisted
-IO command: delivered after ledger commit
+ledger: finalized command envelope persisted locally
+IO command: delivered after local ledger commit
 after-action: confirmed_changed observed_state=on
 ```
 
@@ -1470,7 +1595,7 @@ after-action: confirmed_changed observed_state=on
 ```text
 snapshot: co2_ppm=1200, fan_state=on, freshness=fresh
 reasoner outcome: propose_no_action
-ledger: no-action decision recorded
+ledger: finalized no-action decision recorded locally
 IO command: not delivered
 ```
 
@@ -1480,7 +1605,7 @@ IO command: not delivered
 snapshot: co2_ppm=1200, fan_state=off, freshness=stale
 reasoner outcome: insufficient_fresh_data
 policy decision: deny_stale_snapshot
-ledger: stale deny decision recorded
+ledger: finalized stale deny decision recorded locally
 IO command: not delivered
 ```
 
@@ -1505,7 +1630,8 @@ canonical JSON/hash/signature rules
 PolicyDecision, CapabilityCheck, and DeliveryReceipt contracts
 fixed ledger event types
 signed genesis event
-basic append-only ledger table with runtime role and mutation triggers
+basic append-only local SQLite ledger with WAL mode and mutation rejection
+triggers
 reasoner
 capability check
 policy decision
@@ -1520,9 +1646,9 @@ The following are deferred until after the simulator vertical slice:
 ```text
 Home Assistant WebSocket reconnect behavior
 Phoenix LiveView dashboard
-Postgres LISTEN/NOTIFY
-production database operational hardening beyond the V1 runtime role and
-mutation triggers
+multi-core ledger catch-up and quorum repair
+production database operational hardening beyond local SQLite file
+permissions and mutation triggers
 node fault/restart events
 IO debug log rotation
 non-fan actuator stubs
@@ -1533,29 +1659,40 @@ non-fan actuator stubs
 V2 adds three-core voting and quorum:
 
 - three core nodes A/B/C;
+- one local SQLite decision ledger per core node;
 - ordered identical snapshots;
 - 2-of-3 voting over normalized actions/no-actions;
 - rotating finalizer;
 - single command envelope issuance;
 - IO execution at most once;
+- quorum catch-up after node restart or network partition;
 - fault-injection test rig that kills, restarts, delays, or partitions core
   nodes.
 
 V2 persistence should move final command issuance to the rotating finalizer
-after quorum. Each core node should persist or submit its signed proposal/vote,
-and the finalizer should persist the finalized consensus decision that
-references supporting votes before any actuator command is sent. IO must reject
-command envelopes that do not reference a persisted finalized decision.
+after quorum. Each core node should sign its proposal/vote. After quorum, each
+participating node persists the finalized consensus decision and supporting
+vote references to its own local SQLite ledger. The finalizer must persist the
+finalized decision locally before issuing the single command envelope. IO must
+reject command envelopes that do not reference a finalized decision and quorum
+evidence.
+
+Network split behavior is part of the V2 acceptance bar:
+
+- a 2-of-3 side can continue finalizing actions;
+- a 1-of-3 side cannot finalize or command actuators;
+- healed nodes append local catch-up evidence for signed finalized decisions
+  before becoming eligible finalizers again;
+- conflicting finalized records for the same `consensus_decision_id`,
+  `correlation_id`, or `idempotency_key` fail verification.
 
 V2/V3 should also revisit:
 
-- stronger persistence semantics across multiple core nodes;
+- quorum certificates and catch-up protocol details across multiple local
+  ledgers;
 - stronger immutable append-only storage options, including database-level
   immutability, external anchoring, WORM-style storage, or a specialized
   append-only event store;
-- local per-core decision logs as non-authoritative debugging and forensic
-  aids for diagnosing pre-crash reasoning, transient state, or node-local
-  failures that did not make it into the durable shared ledger;
 - quorum signatures on command envelopes;
 - application-level sensor/actuator signatures;
 - separated keys or asymmetric cryptography;

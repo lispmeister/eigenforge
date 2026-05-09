@@ -10,35 +10,109 @@ defmodule Eigenforge.Contracts.LedgerEvent do
   @schema_id "eigenforge.ledger_event"
   @schema_version 1
   @format_version "json-canonical-v1"
-  @fields [:causation_id, :correlation_id, :event_hash, :event_id, :event_type, :format_version, :observed_at, :occurred_at, :payload, :payload_hash, :persisted_at, :previous_event_hash, :schema_id, :schema_version, :sequence, :signature, :signature_version, :source_app, :subject]
-  @required_fields [:format_version, :schema_id, :schema_version, :event_id, :sequence, :event_type, :subject, :source_app, :occurred_at, :persisted_at, :payload, :payload_hash, :previous_event_hash, :event_hash, :signature_version, :signature]
-  @field_types [causation_id: :string, correlation_id: :string, event_hash: :string, event_id: :string, event_type: :string, format_version: :string, observed_at: :string, occurred_at: :string, payload: :object, payload_hash: :string, persisted_at: :string, previous_event_hash: :string, schema_id: :string, schema_version: :integer, sequence: :integer, signature: :string, signature_version: :string, source_app: :string, subject: :string]
+  @fields [
+    :causation_id,
+    :consensus_decision_id,
+    :consensus_status,
+    :core_node_id,
+    :correlation_id,
+    :event_hash,
+    :event_id,
+    :event_type,
+    :format_version,
+    :observed_at,
+    :occurred_at,
+    :payload,
+    :payload_hash,
+    :persisted_at,
+    :previous_event_hash,
+    :quorum_ref,
+    :schema_id,
+    :schema_version,
+    :sequence,
+    :signature,
+    :signature_version,
+    :source_app,
+    :subject
+  ]
+  @required_fields [
+    :format_version,
+    :schema_id,
+    :schema_version,
+    :event_id,
+    :sequence,
+    :event_type,
+    :core_node_id,
+    :consensus_decision_id,
+    :consensus_status,
+    :quorum_ref,
+    :subject,
+    :source_app,
+    :occurred_at,
+    :persisted_at,
+    :payload,
+    :payload_hash,
+    :previous_event_hash,
+    :event_hash,
+    :signature_version,
+    :signature
+  ]
+  @field_types [
+    causation_id: :string,
+    consensus_decision_id: :string,
+    consensus_status: :string,
+    core_node_id: :string,
+    correlation_id: :string,
+    event_hash: :string,
+    event_id: :string,
+    event_type: :string,
+    format_version: :string,
+    observed_at: :string,
+    occurred_at: :string,
+    payload: :object,
+    payload_hash: :string,
+    persisted_at: :string,
+    previous_event_hash: :string,
+    quorum_ref: :object,
+    schema_id: :string,
+    schema_version: :integer,
+    sequence: :integer,
+    signature: :string,
+    signature_version: :string,
+    source_app: :string,
+    subject: :string
+  ]
 
   @enforce_keys []
-  defstruct [
-    causation_id: nil,
-    correlation_id: nil,
-    event_hash: nil,
-    event_id: nil,
-    event_type: nil,
-    format_version: nil,
-    observed_at: nil,
-    occurred_at: nil,
-    payload: nil,
-    payload_hash: nil,
-    persisted_at: nil,
-    previous_event_hash: nil,
-    schema_id: nil,
-    schema_version: nil,
-    sequence: nil,
-    signature: nil,
-    signature_version: nil,
-    source_app: nil,
-    subject: nil
-  ]
+  defstruct causation_id: nil,
+            consensus_decision_id: nil,
+            consensus_status: nil,
+            core_node_id: nil,
+            correlation_id: nil,
+            event_hash: nil,
+            event_id: nil,
+            event_type: nil,
+            format_version: nil,
+            observed_at: nil,
+            occurred_at: nil,
+            payload: nil,
+            payload_hash: nil,
+            persisted_at: nil,
+            previous_event_hash: nil,
+            quorum_ref: nil,
+            schema_id: nil,
+            schema_version: nil,
+            sequence: nil,
+            signature: nil,
+            signature_version: nil,
+            source_app: nil,
+            subject: nil
 
   @type t :: %__MODULE__{
           causation_id: String.t() | nil,
+          consensus_decision_id: String.t() | nil,
+          consensus_status: String.t() | nil,
+          core_node_id: String.t() | nil,
           correlation_id: String.t() | nil,
           event_hash: String.t() | nil,
           event_id: String.t() | nil,
@@ -50,6 +124,7 @@ defmodule Eigenforge.Contracts.LedgerEvent do
           payload_hash: String.t() | nil,
           persisted_at: String.t() | nil,
           previous_event_hash: String.t() | nil,
+          quorum_ref: map() | nil,
           schema_id: String.t() | nil,
           schema_version: integer() | nil,
           sequence: integer() | nil,
@@ -73,5 +148,7 @@ defmodule Eigenforge.Contracts.LedgerEvent do
   def canonical_json(value), do: Eigenforge.Contracts.canonical_json(signable_map(value))
   def payload_hash(value), do: Eigenforge.Contracts.payload_hash(value)
   def sign_hmac(value, secret), do: Eigenforge.Contracts.sign_hmac(value, secret)
-  def verify_hmac(value, secret, signature), do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
+
+  def verify_hmac(value, secret, signature),
+    do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
 end

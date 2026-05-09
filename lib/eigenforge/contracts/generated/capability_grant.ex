@@ -10,22 +10,50 @@ defmodule Eigenforge.Contracts.CapabilityGrant do
   @schema_id "eigenforge.capability_grant"
   @schema_version 1
   @format_version "json-canonical-v1"
-  @fields [:action, :format_version, :grant_id, :issued_at, :schema_id, :schema_version, :scope, :subject, :target]
-  @required_fields [:format_version, :schema_id, :schema_version, :grant_id, :subject, :target, :action, :scope, :issued_at]
-  @field_types [action: :string, format_version: :string, grant_id: :string, issued_at: :string, schema_id: :string, schema_version: :integer, scope: :string, subject: :string, target: :string]
+  @fields [
+    :action,
+    :format_version,
+    :grant_id,
+    :issued_at,
+    :schema_id,
+    :schema_version,
+    :scope,
+    :subject,
+    :target
+  ]
+  @required_fields [
+    :format_version,
+    :schema_id,
+    :schema_version,
+    :grant_id,
+    :subject,
+    :target,
+    :action,
+    :scope,
+    :issued_at
+  ]
+  @field_types [
+    action: :string,
+    format_version: :string,
+    grant_id: :string,
+    issued_at: :string,
+    schema_id: :string,
+    schema_version: :integer,
+    scope: :string,
+    subject: :string,
+    target: :string
+  ]
 
   @enforce_keys []
-  defstruct [
-    action: nil,
-    format_version: nil,
-    grant_id: nil,
-    issued_at: nil,
-    schema_id: nil,
-    schema_version: nil,
-    scope: nil,
-    subject: nil,
-    target: nil
-  ]
+  defstruct action: nil,
+            format_version: nil,
+            grant_id: nil,
+            issued_at: nil,
+            schema_id: nil,
+            schema_version: nil,
+            scope: nil,
+            subject: nil,
+            target: nil
 
   @type t :: %__MODULE__{
           action: String.t() | nil,
@@ -53,5 +81,7 @@ defmodule Eigenforge.Contracts.CapabilityGrant do
   def canonical_json(value), do: Eigenforge.Contracts.canonical_json(signable_map(value))
   def payload_hash(value), do: Eigenforge.Contracts.payload_hash(value)
   def sign_hmac(value, secret), do: Eigenforge.Contracts.sign_hmac(value, secret)
-  def verify_hmac(value, secret, signature), do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
+
+  def verify_hmac(value, secret, signature),
+    do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
 end

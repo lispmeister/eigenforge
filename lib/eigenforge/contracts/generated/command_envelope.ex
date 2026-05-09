@@ -10,34 +10,98 @@ defmodule Eigenforge.Contracts.CommandEnvelope do
   @schema_id "eigenforge.command_envelope"
   @schema_version 1
   @format_version "json-canonical-v1"
-  @fields [:action, :capability_event_id, :command_id, :decision_event_id, :expires_at, :format_version, :idempotency_key, :issued_at, :payload_hash, :policy_decision_id, :reasoner_outcome_event_id, :requested_state, :schema_id, :schema_version, :scope, :signature, :signature_version, :snapshot_id, :snapshot_seq, :subject, :target]
-  @required_fields [:format_version, :schema_id, :schema_version, :command_id, :idempotency_key, :subject, :target, :action, :scope, :requested_state, :snapshot_id, :snapshot_seq, :decision_event_id, :reasoner_outcome_event_id, :capability_event_id, :policy_decision_id, :issued_at, :expires_at, :payload_hash, :signature_version, :signature]
-  @field_types [action: :string, capability_event_id: :string, command_id: :string, decision_event_id: :string, expires_at: :string, format_version: :string, idempotency_key: :string, issued_at: :string, payload_hash: :string, policy_decision_id: :string, reasoner_outcome_event_id: :string, requested_state: :string, schema_id: :string, schema_version: :integer, scope: :string, signature: :string, signature_version: :string, snapshot_id: :string, snapshot_seq: :integer, subject: :string, target: :string]
+  @fields [
+    :action,
+    :capability_event_id,
+    :command_id,
+    :decision_event_id,
+    :expires_at,
+    :format_version,
+    :idempotency_key,
+    :issued_at,
+    :payload_hash,
+    :policy_decision_id,
+    :reasoner_outcome_event_id,
+    :requested_state,
+    :schema_id,
+    :schema_version,
+    :scope,
+    :signature,
+    :signature_version,
+    :snapshot_id,
+    :snapshot_seq,
+    :subject,
+    :target
+  ]
+  @required_fields [
+    :format_version,
+    :schema_id,
+    :schema_version,
+    :command_id,
+    :idempotency_key,
+    :subject,
+    :target,
+    :action,
+    :scope,
+    :requested_state,
+    :snapshot_id,
+    :snapshot_seq,
+    :decision_event_id,
+    :reasoner_outcome_event_id,
+    :capability_event_id,
+    :policy_decision_id,
+    :issued_at,
+    :expires_at,
+    :payload_hash,
+    :signature_version,
+    :signature
+  ]
+  @field_types [
+    action: :string,
+    capability_event_id: :string,
+    command_id: :string,
+    decision_event_id: :string,
+    expires_at: :string,
+    format_version: :string,
+    idempotency_key: :string,
+    issued_at: :string,
+    payload_hash: :string,
+    policy_decision_id: :string,
+    reasoner_outcome_event_id: :string,
+    requested_state: :string,
+    schema_id: :string,
+    schema_version: :integer,
+    scope: :string,
+    signature: :string,
+    signature_version: :string,
+    snapshot_id: :string,
+    snapshot_seq: :integer,
+    subject: :string,
+    target: :string
+  ]
 
   @enforce_keys []
-  defstruct [
-    action: nil,
-    capability_event_id: nil,
-    command_id: nil,
-    decision_event_id: nil,
-    expires_at: nil,
-    format_version: nil,
-    idempotency_key: nil,
-    issued_at: nil,
-    payload_hash: nil,
-    policy_decision_id: nil,
-    reasoner_outcome_event_id: nil,
-    requested_state: nil,
-    schema_id: nil,
-    schema_version: nil,
-    scope: nil,
-    signature: nil,
-    signature_version: nil,
-    snapshot_id: nil,
-    snapshot_seq: nil,
-    subject: nil,
-    target: nil
-  ]
+  defstruct action: nil,
+            capability_event_id: nil,
+            command_id: nil,
+            decision_event_id: nil,
+            expires_at: nil,
+            format_version: nil,
+            idempotency_key: nil,
+            issued_at: nil,
+            payload_hash: nil,
+            policy_decision_id: nil,
+            reasoner_outcome_event_id: nil,
+            requested_state: nil,
+            schema_id: nil,
+            schema_version: nil,
+            scope: nil,
+            signature: nil,
+            signature_version: nil,
+            snapshot_id: nil,
+            snapshot_seq: nil,
+            subject: nil,
+            target: nil
 
   @type t :: %__MODULE__{
           action: String.t() | nil,
@@ -77,5 +141,7 @@ defmodule Eigenforge.Contracts.CommandEnvelope do
   def canonical_json(value), do: Eigenforge.Contracts.canonical_json(signable_map(value))
   def payload_hash(value), do: Eigenforge.Contracts.payload_hash(value)
   def sign_hmac(value, secret), do: Eigenforge.Contracts.sign_hmac(value, secret)
-  def verify_hmac(value, secret, signature), do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
+
+  def verify_hmac(value, secret, signature),
+    do: Eigenforge.Contracts.verify_hmac(value, secret, signature)
 end

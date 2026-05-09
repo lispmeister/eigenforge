@@ -23,6 +23,9 @@ defmodule Eigenforge.Trace do
   @reasoner_version "v1"
   @signature_version "hmac-sha256-v1"
   @genesis_previous_hash "eigenforge-ledger-genesis-v1"
+  @core_node_id "core_a"
+  @ledger_backend "local_sqlite"
+  @consensus_status "single_core_finalized"
 
   @type run_result :: {:ok, map()} | {:error, term()}
 
@@ -61,6 +64,9 @@ defmodule Eigenforge.Trace do
         %{
           "trace_id" => stable_id("trace", [snapshot.snapshot_id]),
           "fixture" => fixture_path,
+          "core_node_id" => @core_node_id,
+          "ledger_backend" => @ledger_backend,
+          "consensus_status" => @consensus_status,
           "steps" => steps(reasoner, capability, policy, command, delivery, after_action),
           "ledger_events" => Enum.map(ledger_events, &public_map/1),
           "command_envelopes" => maybe_list(command),
@@ -109,12 +115,24 @@ defmodule Eigenforge.Trace do
   end
 
   defp reason(%NormalizedSnapshot{freshness: "stale"} = snapshot) do
-    outcome(snapshot, "insufficient_fresh_data", nil, nil, "CO2 reading is stale; deny actuator command.")
+    outcome(
+      snapshot,
+      "insufficient_fresh_data",
+      nil,
+      nil,
+      "CO2 reading is stale; deny actuator command."
+    )
   end
 
   defp reason(%NormalizedSnapshot{source_status: %{"co2" => status}} = snapshot)
        when status in ["stale", "unknown", "malformed", "missing", "unavailable"] do
-    outcome(snapshot, "insufficient_fresh_data", nil, nil, "CO2 reading is #{status}; deny actuator command.")
+    outcome(
+      snapshot,
+      "insufficient_fresh_data",
+      nil,
+      nil,
+      "CO2 reading is #{status}; deny actuator command."
+    )
   end
 
   defp reason(%NormalizedSnapshot{co2_ppm: co2, fan_state: "on"} = snapshot) when co2 > 1000 do
@@ -128,7 +146,13 @@ defmodule Eigenforge.Trace do
   end
 
   defp reason(%NormalizedSnapshot{co2_ppm: co2} = snapshot) when co2 > 1000 do
-    outcome(snapshot, "propose_action", @target, "on", "CO2 #{co2} ppm exceeds 1000 ppm threshold; propose vent fan ON.")
+    outcome(
+      snapshot,
+      "propose_action",
+      @target,
+      "on",
+      "CO2 #{co2} ppm exceeds 1000 ppm threshold; propose vent fan ON."
+    )
   end
 
   defp reason(%NormalizedSnapshot{co2_ppm: co2, fan_state: "off"} = snapshot) when co2 < 500 do
@@ -142,11 +166,23 @@ defmodule Eigenforge.Trace do
   end
 
   defp reason(%NormalizedSnapshot{co2_ppm: co2} = snapshot) when co2 < 500 do
-    outcome(snapshot, "propose_action", @target, "off", "CO2 #{co2} ppm is below 500 ppm threshold; propose vent fan OFF.")
+    outcome(
+      snapshot,
+      "propose_action",
+      @target,
+      "off",
+      "CO2 #{co2} ppm is below 500 ppm threshold; propose vent fan OFF."
+    )
   end
 
   defp reason(snapshot) do
-    outcome(snapshot, "no_threshold_event", nil, nil, "CO2 is inside nominal range; no threshold event.")
+    outcome(
+      snapshot,
+      "no_threshold_event",
+      nil,
+      nil,
+      "CO2 is inside nominal range; no threshold event."
+    )
   end
 
   defp outcome(snapshot, type, target, requested_state, reason) do
@@ -169,7 +205,8 @@ defmodule Eigenforge.Trace do
   defp capability(%ReasonerOutcome{outcome_type: "propose_action"} = reasoner, _snapshot) do
     {:ok,
      CapabilityCheck.new!(%{
-       capability_check_id: stable_id("cap-check", [reasoner.snapshot_id, reasoner.requested_state]),
+       capability_check_id:
+         stable_id("cap-check", [reasoner.snapshot_id, reasoner.requested_state]),
        subject: @subject,
        target: @target,
        action: @action,
@@ -196,12 +233,28 @@ defmodule Eigenforge.Trace do
      })}
   end
 
-  defp policy(%ReasonerOutcome{outcome_type: "insufficient_fresh_data"} = reasoner, capability, snapshot) do
-    policy_decision(reasoner, capability, snapshot, "deny_stale_snapshot", "CO2 input is not fresh enough for actuation.")
+  defp policy(
+         %ReasonerOutcome{outcome_type: "insufficient_fresh_data"} = reasoner,
+         capability,
+         snapshot
+       ) do
+    policy_decision(
+      reasoner,
+      capability,
+      snapshot,
+      "deny_stale_snapshot",
+      "CO2 input is not fresh enough for actuation."
+    )
   end
 
   defp policy(%ReasonerOutcome{outcome_type: "propose_action"} = reasoner, capability, snapshot) do
-    policy_decision(reasoner, capability, snapshot, "allow", "Capability and policy allow idempotent fan command.")
+    policy_decision(
+      reasoner,
+      capability,
+      snapshot,
+      "allow",
+      "Capability and policy allow idempotent fan command."
+    )
   end
 
   defp policy(reasoner, capability, snapshot) do
@@ -211,10 +264,16 @@ defmodule Eigenforge.Trace do
   defp policy_decision(reasoner, capability, snapshot, decision, reason) do
     {:ok,
      PolicyDecision.new!(%{
-       policy_decision_id: stable_id("policy", [snapshot.snapshot_id, reasoner.outcome_type, decision]),
+       policy_decision_id:
+         stable_id("policy", [snapshot.snapshot_id, reasoner.outcome_type, decision]),
        snapshot_id: snapshot.snapshot_id,
        snapshot_hash: snapshot.snapshot_hash,
-       reasoner_outcome_id: stable_id("reasoner", [snapshot.snapshot_id, reasoner.outcome_type, reasoner.requested_state || "none"]),
+       reasoner_outcome_id:
+         stable_id("reasoner", [
+           snapshot.snapshot_id,
+           reasoner.outcome_type,
+           reasoner.requested_state || "none"
+         ]),
        subject: @subject,
        target: reasoner.target || @target,
        action: @action,
@@ -229,10 +288,21 @@ defmodule Eigenforge.Trace do
      })}
   end
 
-  defp maybe_command(%ReasonerOutcome{outcome_type: "propose_action"} = reasoner, _capability, %PolicyDecision{decision: "allow"} = policy, snapshot) do
+  defp maybe_command(
+         %ReasonerOutcome{outcome_type: "propose_action"} = reasoner,
+         _capability,
+         %PolicyDecision{decision: "allow"} = policy,
+         snapshot
+       ) do
     base = %{
       command_id: stable_id("cmd", [snapshot.snapshot_id, reasoner.requested_state]),
-      idempotency_key: stable_id("idem", [snapshot.room_id, @target, reasoner.requested_state, snapshot.snapshot_id]),
+      idempotency_key:
+        stable_id("idem", [
+          snapshot.room_id,
+          @target,
+          reasoner.requested_state,
+          snapshot.snapshot_id
+        ]),
       subject: @subject,
       target: @target,
       action: @action,
@@ -241,8 +311,10 @@ defmodule Eigenforge.Trace do
       snapshot_id: snapshot.snapshot_id,
       snapshot_seq: snapshot.snapshot_seq,
       decision_event_id: stable_id("event", ["command_envelope_issued", snapshot.snapshot_id]),
-      reasoner_outcome_event_id: stable_id("event", ["reasoner_outcome_recorded", snapshot.snapshot_id]),
-      capability_event_id: stable_id("event", ["capability_check_recorded", snapshot.snapshot_id]),
+      reasoner_outcome_event_id:
+        stable_id("event", ["reasoner_outcome_recorded", snapshot.snapshot_id]),
+      capability_event_id:
+        stable_id("event", ["capability_check_recorded", snapshot.snapshot_id]),
       policy_decision_id: policy.policy_decision_id,
       issued_at: timestamp(),
       expires_at: "2026-05-08T12:00:05.000Z",
@@ -301,37 +373,46 @@ defmodule Eigenforge.Trace do
   end
 
   defp build_ledger(payloads, snapshot) do
-    Enum.reduce(payloads, {[], @genesis_previous_hash, 1}, fn payload, {events, previous_hash, sequence} ->
-      event_type = event_type(payload)
-      event_id = stable_id("event", [event_type, snapshot.snapshot_id])
+    consensus_decision_id = stable_id("consensus", [snapshot.snapshot_id])
 
-      base = %{
-        event_id: event_id,
-        sequence: sequence,
-        event_type: event_type,
-        causation_id: List.last(events) && List.last(events).event_id,
-        correlation_id: stable_id("correlation", [snapshot.snapshot_id]),
-        subject: @subject,
-        source_app: "eigenforge_core",
-        occurred_at: timestamp(),
-        observed_at: timestamp(),
-        persisted_at: timestamp(),
-        payload: Map.from_struct(payload),
-        payload_hash: Contracts.hash_canonical(Map.from_struct(payload)),
-        previous_event_hash: previous_hash,
-        event_hash: "",
-        signature_version: @signature_version,
-        signature: ""
-      }
+    {events, _previous_hash, _sequence} =
+      Enum.reduce(payloads, {[], @genesis_previous_hash, 1}, fn payload,
+                                                                {events, previous_hash, sequence} ->
+        event_type = event_type(payload)
+        event_id = stable_id("event", [event_type, snapshot.snapshot_id])
 
-      event_hash = Contracts.hash_excluding(base, [:event_hash, :signature])
-      unsigned = %{base | event_hash: event_hash}
-      signature = Contracts.sign_hmac_excluding(unsigned, @secret, [:signature])
-      event = LedgerEvent.new!(%{unsigned | signature: signature})
+        base = %{
+          event_id: event_id,
+          sequence: sequence,
+          event_type: event_type,
+          core_node_id: @core_node_id,
+          consensus_decision_id: consensus_decision_id,
+          consensus_status: @consensus_status,
+          quorum_ref: %{},
+          causation_id: List.last(events) && List.last(events).event_id,
+          correlation_id: stable_id("correlation", [snapshot.snapshot_id]),
+          subject: @subject,
+          source_app: "eigenforge_core",
+          occurred_at: timestamp(),
+          observed_at: timestamp(),
+          persisted_at: timestamp(),
+          payload: Map.from_struct(payload),
+          payload_hash: Contracts.hash_canonical(Map.from_struct(payload)),
+          previous_event_hash: previous_hash,
+          event_hash: "",
+          signature_version: @signature_version,
+          signature: ""
+        }
 
-      {events ++ [event], event.event_hash, sequence + 1}
-    end)
-    |> elem(0)
+        event_hash = Contracts.hash_excluding(base, [:event_hash, :signature])
+        unsigned = %{base | event_hash: event_hash}
+        signature = Contracts.sign_hmac_excluding(unsigned, @secret, [:signature])
+        event = LedgerEvent.new!(%{unsigned | signature: signature})
+
+        {events ++ [event], event.event_hash, sequence + 1}
+      end)
+
+    events
   end
 
   defp event_type(%ReasonerOutcome{}), do: "reasoner_outcome_recorded"
@@ -344,14 +425,30 @@ defmodule Eigenforge.Trace do
   defp verify_trace(ledger_events, command, delivery, after_action) do
     %{
       "ledger_hash_chain_valid" => ledger_hash_chain_valid?(ledger_events),
-      "command_delivery_after_ledger_commit" => is_nil(command) or Enum.any?(ledger_events, &(&1.event_type == "command_envelope_issued")),
-      "delivery_receipt_valid" => is_nil(delivery) or (not is_nil(command) and delivery.command_id == command.command_id),
-      "after_action_core_authored" => is_nil(after_action) or Enum.any?(ledger_events, &(&1.event_type == "after_action_recorded"))
+      "local_ledger_committed" => local_ledger_committed?(ledger_events),
+      "consensus_status_valid" => consensus_status_valid?(ledger_events),
+      "command_delivery_after_local_commit" =>
+        is_nil(command) or Enum.any?(ledger_events, &(&1.event_type == "command_envelope_issued")),
+      "delivery_receipt_valid" =>
+        is_nil(delivery) or (not is_nil(command) and delivery.command_id == command.command_id),
+      "after_action_core_authored" =>
+        is_nil(after_action) or
+          Enum.any?(ledger_events, &(&1.event_type == "after_action_recorded"))
     }
   end
 
-  defp verify_trace_shape(%{"verification" => verification}) do
-    if Enum.all?(verification, fn {_key, value} -> value == true end), do: :ok, else: {:error, {:verification_failed, verification}}
+  defp verify_trace_shape(%{
+         "core_node_id" => @core_node_id,
+         "ledger_backend" => @ledger_backend,
+         "consensus_status" => @consensus_status,
+         "ledger_events" => ledger_events,
+         "verification" => verification
+       })
+       when is_list(ledger_events) and is_map(verification) do
+    if Enum.all?(verification, fn {_key, value} -> value == true end) and
+         trace_consensus_shape_valid?(ledger_events),
+       do: :ok,
+       else: {:error, {:verification_failed, verification}}
   end
 
   defp verify_trace_shape(_trace), do: {:error, :missing_verification}
@@ -364,14 +461,52 @@ defmodule Eigenforge.Trace do
     |> Enum.all?(fn [left, right] -> right.previous_event_hash == left.event_hash end)
   end
 
+  defp local_ledger_committed?(events) do
+    Enum.all?(events, &(&1.core_node_id == @core_node_id))
+  end
+
+  defp consensus_status_valid?(events) do
+    Enum.all?(events, fn event ->
+      event.consensus_status == @consensus_status and
+        is_binary(event.consensus_decision_id) and
+        event.consensus_decision_id != "" and
+        event.quorum_ref == %{}
+    end)
+  end
+
+  defp trace_consensus_shape_valid?(events) do
+    consensus_ids =
+      events
+      |> Enum.map(&Map.get(&1, "consensus_decision_id"))
+      |> Enum.uniq()
+
+    match?([id] when is_binary(id) and id != "", consensus_ids) and
+      Enum.all?(events, fn event ->
+        Map.get(event, "core_node_id") == @core_node_id and
+          Map.get(event, "consensus_status") == @consensus_status and
+          Map.get(event, "quorum_ref") == %{}
+      end)
+  end
+
   defp steps(reasoner, capability, policy, command, delivery, after_action) do
     [
       %{"name" => "reasoner_outcome", "result" => reasoner.outcome_type},
       %{"name" => "capability_check", "result" => capability.result},
       %{"name" => "policy_decision", "result" => policy.decision},
-      %{"name" => "command_envelope", "result" => if(command, do: "issued", else: "not_delivered")},
-      %{"name" => "delivery_receipt", "result" => if(delivery, do: "issued", else: "not_applicable")},
-      %{"name" => "after_action", "result" => if(after_action, do: after_action.status, else: "not_applicable")}
+      %{"name" => "finalized_decision", "result" => @consensus_status},
+      %{"name" => "local_ledger_commit", "result" => "committed"},
+      %{
+        "name" => "command_envelope",
+        "result" => if(command, do: "issued", else: "not_delivered")
+      },
+      %{
+        "name" => "delivery_receipt",
+        "result" => if(delivery, do: "issued", else: "not_applicable")
+      },
+      %{
+        "name" => "after_action",
+        "result" => if(after_action, do: after_action.status, else: "not_applicable")
+      }
     ]
   end
 
