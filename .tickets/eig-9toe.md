@@ -1,7 +1,7 @@
 ---
 id: eig-9toe
-status: open
-deps: [eig-60h5]
+status: closed
+deps: [eig-60h5, eig-p9ms]
 links: []
 created: 2026-05-08T13:33:14Z
 type: feature
@@ -15,5 +15,11 @@ Spec §4: detached .sig sidecars with payload_hash, signature_version, signature
 
 ## Acceptance Criteria
 
-Signing config/devices.json produces a sidecar the runtime accepts; missing/invalid sidecar fails startup in home_assistant mode and is permitted in simulator mode.
+Signing config/devices.json and capability grant JSON produces sidecars the runtime accepts. Missing/invalid sidecars fail startup in both home_assistant and simulator runtime modes; only static simulator snapshot fixtures may be unsigned.
 
+
+## Notes
+
+**2026-05-10T05:09:36Z**
+
+2026-05-10 spec clarification update: signing helpers remain required for normal device inventory and capability grants in both home_assistant and simulator modes; unsigned allowance applies only to static simulator snapshot fixtures.

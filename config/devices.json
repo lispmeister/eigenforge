@@ -1,0 +1,35 @@
+{
+  "format_version": "json-canonical-v1",
+  "schema_id": "eigenforge.device_inventory",
+  "schema_version": 1,
+  "rooms": [
+    {
+      "room_id": "placeholder",
+      "active": true,
+      "sensors": [
+        {
+          "sensor_id": "co2",
+          "entity_id": "sensor.placeholder_co2",
+          "kind": "co2_ppm"
+        },
+        {
+          "sensor_id": "humidity",
+          "entity_id": "sensor.placeholder_humidity",
+          "kind": "humidity_basis_points"
+        },
+        {
+          "sensor_id": "temperature",
+          "entity_id": "sensor.placeholder_temperature",
+          "kind": "temperature_millicelsius"
+        }
+      ],
+      "actuators": [
+        {
+          "actuator_id": "vent_fan",
+          "entity_id": "switch.placeholder_fan",
+          "kind": "fan"
+        }
+      ]
+    }
+  ]
+}

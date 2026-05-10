@@ -1,0 +1,11 @@
+{
+  "action": "command_actuator",
+  "format_version": "json-canonical-v1",
+  "grant_id": "cap-core-rule-stub-actuator-fan-command-actuator-room-placeholder",
+  "issued_at": "2026-05-10T00:00:00.000Z",
+  "schema_id": "eigenforge.capability_grant",
+  "schema_version": 1,
+  "scope": "room:placeholder",
+  "subject": "core_rule_stub",
+  "target": "actuator:fan"
+}

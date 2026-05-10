@@ -1,0 +1,64 @@
+{
+  "$id": "eigenforge.policy_decision",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Eigenforge Policy Decision",
+  "type": "object",
+  "additionalProperties": false,
+  "x-elixir-module": "Eigenforge.Contracts.PolicyDecision",
+  "x-format-version": "json-canonical-v1",
+  "x-schema-version": 1,
+  "required": [
+    "format_version",
+    "schema_id",
+    "schema_version",
+    "policy_decision_id",
+    "snapshot_id",
+    "snapshot_hash",
+    "reasoner_outcome_id",
+    "subject",
+    "target",
+    "action",
+    "scope",
+    "decision",
+    "capability_status",
+    "reason",
+    "decided_at",
+    "metadata"
+  ],
+  "properties": {
+    "format_version": { "type": "string", "const": "json-canonical-v1" },
+    "schema_id": { "type": "string", "const": "eigenforge.policy_decision" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "policy_decision_id": { "type": "string" },
+    "snapshot_id": { "type": "string" },
+    "snapshot_hash": { "type": "string" },
+    "reasoner_outcome_id": { "type": "string" },
+    "subject": { "type": "string" },
+    "target": { "type": "string" },
+    "action": { "type": "string" },
+    "scope": { "type": "string" },
+    "requested_state": { "type": ["string", "null"] },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "no_command",
+        "deny_missing_capability",
+        "deny_invalid_capability",
+        "deny_stale_snapshot",
+        "deny_unknown_non_idempotent_actuator_state",
+        "deny_expired_command",
+        "deny_unsupported_action",
+        "noop_stub"
+      ]
+    },
+    "capability_grant_id": { "type": ["string", "null"] },
+    "capability_status": {
+      "type": "string",
+      "enum": ["allow", "deny_missing_capability", "deny_invalid_capability", "not_checked"]
+    },
+    "reason": { "type": "string" },
+    "decided_at": { "type": "string", "format": "date-time" },
+    "metadata": { "type": "object" }
+  }
+}

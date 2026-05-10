@@ -22,3 +22,7 @@ Simulator snapshot published on PubSub flows through the pipeline and appends th
 **2026-05-09T14:00:19Z**
 
 Aligned with revised spec: supervised OODA pipeline must append finalized decisions to node-local SQLite ledger before mailbox command delivery.
+
+**2026-05-10T05:09:27Z**
+
+2026-05-10 spec clarification update: supervised OODA pipeline must implement stale CO2 ownership sequence, policy no_command/not_checked paths, exact event cardinality, and command/no-command behavior from PROTOTYPE-V1-SPEC.md.

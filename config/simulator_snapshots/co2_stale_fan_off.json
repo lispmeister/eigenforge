@@ -1,10 +1,13 @@
 {
+  "fixture_schema_id": "eigenforge.simulator_fixture",
+  "fixture_schema_version": 1,
+  "scenario_id": "co2_stale_fan_off",
   "snapshot_id": "snap-co2-stale-fan-off",
   "snapshot_seq": 3,
   "room_id": "placeholder",
   "co2_ppm": 1200,
-  "humidity_percent": 4500,
-  "temperature_c": 22000,
+  "humidity_basis_points": 4500,
+  "temperature_millicelsius": 22000,
   "fan_state": "off",
   "source_entity_ids": {
     "co2": "sensor.placeholder_co2",
@@ -12,11 +15,29 @@
     "temperature": "sensor.placeholder_temperature",
     "fan": "switch.placeholder_fan"
   },
+  "source_observation_ids": {
+    "co2": "obs-co2-stale-fan-off-co2",
+    "humidity": "obs-co2-stale-fan-off-humidity",
+    "temperature": "obs-co2-stale-fan-off-temperature",
+    "fan": "obs-co2-stale-fan-off-fan"
+  },
   "source_observed_at": {
     "co2": "2026-05-08T11:59:00.000Z",
     "humidity": "2026-05-08T12:00:00.000Z",
     "temperature": "2026-05-08T12:00:00.000Z",
     "fan": "2026-05-08T12:00:00.000Z"
+  },
+  "source_received_seq": {
+    "co2": 3,
+    "humidity": 3,
+    "temperature": 3,
+    "fan": 3
+  },
+  "source_received_monotonic_ms": {
+    "co2": 0,
+    "humidity": 0,
+    "temperature": 0,
+    "fan": 0
   },
   "source_status": {
     "co2": "stale",

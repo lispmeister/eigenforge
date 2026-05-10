@@ -1,6 +1,6 @@
 ---
 id: eig-20dl
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-08T13:32:45Z

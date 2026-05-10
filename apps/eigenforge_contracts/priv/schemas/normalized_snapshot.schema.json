@@ -1,0 +1,51 @@
+{
+  "$id": "eigenforge.normalized_snapshot",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Eigenforge Normalized Snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "x-elixir-module": "Eigenforge.Contracts.NormalizedSnapshot",
+  "x-format-version": "json-canonical-v1",
+  "x-schema-version": 1,
+  "required": [
+    "format_version",
+    "schema_id",
+    "schema_version",
+    "snapshot_id",
+    "snapshot_seq",
+    "snapshot_hash",
+    "room_id",
+    "source_entity_ids",
+    "source_observation_ids",
+    "source_observed_at",
+    "source_received_seq",
+    "source_received_monotonic_ms",
+    "source_status",
+    "normalized_at",
+    "freshness"
+  ],
+  "properties": {
+    "format_version": { "type": "string", "const": "json-canonical-v1" },
+    "schema_id": { "type": "string", "const": "eigenforge.normalized_snapshot" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "snapshot_id": { "type": "string" },
+    "snapshot_seq": { "type": "integer" },
+    "snapshot_hash": { "type": "string" },
+    "room_id": { "type": "string" },
+    "co2_ppm": { "type": ["integer", "null"] },
+    "humidity_basis_points": { "type": ["integer", "null"] },
+    "temperature_millicelsius": { "type": ["integer", "null"] },
+    "fan_state": {
+      "type": ["string", "null"],
+      "enum": ["on", "off", "unknown", "stale", "malformed", "missing", "unavailable", "not_yet_observed", null]
+    },
+    "source_entity_ids": { "type": "object" },
+    "source_observation_ids": { "type": "object" },
+    "source_observed_at": { "type": "object" },
+    "source_received_seq": { "type": "object" },
+    "source_received_monotonic_ms": { "type": "object" },
+    "source_status": { "type": "object" },
+    "normalized_at": { "type": "string", "format": "date-time" },
+    "freshness": { "type": "string", "enum": ["fresh", "stale"] }
+  }
+}

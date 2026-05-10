@@ -1,6 +1,6 @@
 ---
 id: eig-n1ik
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-08T13:32:45Z
@@ -17,3 +17,9 @@ trace.ex:319-320 stores Map.from_struct(payload) with atom keys. After a JSON ro
 
 In-memory event.payload and JSON-round-tripped event.payload are structurally equal; string keys used throughout.
 
+
+## Notes
+
+**2026-05-10T05:10:08Z**
+
+2026-05-10 spec clarification update: payload key stringification must preserve canonical JSON key sorting and schema field names exactly, since schema/prose drift is now treated as a V1 contract failure.

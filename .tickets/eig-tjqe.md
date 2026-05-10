@@ -1,6 +1,6 @@
 ---
 id: eig-tjqe
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-08T13:32:45Z
@@ -17,3 +17,9 @@ lib/eigenforge/contracts.ex:171 calls String.to_atom/1 on decoded JSON keys. In 
 
 normalize_keys/1 uses String.to_existing_atom/1 and rejects unknown string keys safely; tests cover an unknown-key fixture.
 
+
+## Notes
+
+**2026-05-10T05:10:08Z**
+
+2026-05-10 spec clarification update: normalization must not create atoms for untrusted schema or IO fields; clarified schema validation makes exact existing field names/enums important.

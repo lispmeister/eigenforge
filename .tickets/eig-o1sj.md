@@ -1,6 +1,6 @@
 ---
 id: eig-o1sj
-status: open
+status: closed
 deps: [eig-pp46, eig-5u7f]
 links: []
 created: 2026-05-08T13:33:14Z
@@ -22,3 +22,7 @@ Concurrent append requests serialize through one node-local writer; failed local
 **2026-05-09T14:00:19Z**
 
 Aligned with revised spec: ticket now targets one node-local SQLite writer using immediate transactions and plain inserts, not Postgres advisory locks; command delivery waits for finalized local commit.
+
+**2026-05-10T05:09:18Z**
+
+2026-05-10 spec clarification update: writer must support the clarified event cardinality paths and command_envelope_issued decision event references, while keeping one writer, plain inserts, WAL, three retry attempts, and no command delivery before commit.

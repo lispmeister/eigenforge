@@ -1,7 +1,7 @@
 #!/usr/bin/env elixir
 
-schemas_dir = Path.expand("../priv/schemas", __DIR__)
-out_dir = Path.expand("../lib/eigenforge/contracts/generated", __DIR__)
+schemas_dir = Path.expand("../apps/eigenforge_contracts/priv/schemas", __DIR__)
+out_dir = Path.expand("../apps/eigenforge_contracts/lib/eigenforge/contracts/generated", __DIR__)
 
 File.mkdir_p!(out_dir)
 

@@ -122,21 +122,23 @@ adapter behavior are future work.
 
 ## Local Configuration
 
-Runtime secrets and Home Assistant entity IDs will live in a project-root
-`.env` file ignored by git.
-
-A committed `.env.example` should contain:
-
-```text
-HOME_ASSISTANT_URL=http://homeassistant.local:8123
-HOME_ASSISTANT_TOKEN=replace_me
-EIGENFORGE_HMAC_SECRET=replace_me
-HA_CO2_ENTITY_ID=sensor.placeholder_co2
-HA_FAN_ENTITY_ID=switch.placeholder_fan
-```
+Runtime secrets and Home Assistant entity IDs live in a project-root `.env`
+file ignored by git. A committed [.env.example](/Users/fix/projects/claude-code/eigenforge/.env.example)
+contains the required simulator, Home Assistant, HMAC, ledger, and IO log
+placeholders.
 
 The app should fail fast when required Home Assistant or signing configuration
 is missing.
+
+The repo also includes signed sample runtime config artifacts for local bring-up:
+
+- [config/devices.json](/Users/fix/projects/claude-code/eigenforge/config/devices.json)
+- [config/devices.json.sig](/Users/fix/projects/claude-code/eigenforge/config/devices.json.sig)
+- [config/capabilities/core_rule_stub_fan.json](/Users/fix/projects/claude-code/eigenforge/config/capabilities/core_rule_stub_fan.json)
+- [config/capabilities/core_rule_stub_fan.json.sig](/Users/fix/projects/claude-code/eigenforge/config/capabilities/core_rule_stub_fan.json.sig)
+
+The committed signatures use the placeholder sample secret from `.env.example`
+so they stay verifiable without committing a real secret.
 
 ## Ledger And Capabilities
 
@@ -156,8 +158,21 @@ mix eigenforge.capability.grant \
   --target actuator:fan \
   --action command_actuator \
   --scope room:placeholder \
-  --out config/capabilities/core_rule_stub_fan.json
+  --out config/capabilities/core_rule_stub_fan.json \
+  --sig config/capabilities/core_rule_stub_fan.json.sig
 ```
+
+Sign the committed sample device inventory with:
+
+```text
+mix eigenforge.config.sign \
+  --in config/devices.json \
+  --sig config/devices.json.sig
+```
+
+The signing helpers read `EIGENFORGE_HMAC_SECRET` from the environment or app
+config, so replace the sample `replace_me` value before using the artifacts for
+anything beyond local development.
 
 ## Dashboard
 
