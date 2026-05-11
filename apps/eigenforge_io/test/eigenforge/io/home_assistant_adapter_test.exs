@@ -89,8 +89,8 @@ defmodule Eigenforge.IO.HomeAssistantAdapterTest do
     assert {:ok, %{"service" => "turn_off"}} =
              HomeAssistantAdapter.command_request("switch.placeholder_fan", "off")
 
-    assert HomeAssistantAdapter.next_backoff_ms(0, 180_000) == 1_000
-    assert HomeAssistantAdapter.next_backoff_ms(3, 180_000) == 8_000
+    assert HomeAssistantAdapter.next_backoff_ms(0, 180_000) == 5_000
+    assert HomeAssistantAdapter.next_backoff_ms(3, 180_000) == 40_000
     assert HomeAssistantAdapter.next_backoff_ms(20, 180_000) == 180_000
   end
 

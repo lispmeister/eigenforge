@@ -9,6 +9,7 @@ defmodule Eigenforge.Core.IoFaultStatus do
   alias Eigenforge.Contracts.IoFaultStatusEvent
   alias Eigenforge.Core.CanonicalTime
   alias Eigenforge.Core.LedgerWriter
+  alias Eigenforge.Core.Redaction
   alias Eigenforge.Core.RuntimeConfig
   alias Eigenforge.Core.SignedConfig
 
@@ -147,7 +148,7 @@ defmodule Eigenforge.Core.IoFaultStatus do
     payload =
       event
       |> Contracts.signable_map()
-      |> redact(state.redactions)
+      |> Redaction.redact(secrets: state.redactions)
       |> Contracts.canonical_json()
 
     state.log_path
@@ -218,18 +219,6 @@ defmodule Eigenforge.Core.IoFaultStatus do
       Enum.each(entries, fn {pid, _value} -> send(pid, {:io_fault_status, event}) end)
     end)
   end
-
-  defp redact(map, redactions) when is_map(map) do
-    Map.new(map, fn {key, value} -> {key, redact(value, redactions)} end)
-  end
-
-  defp redact(list, redactions) when is_list(list), do: Enum.map(list, &redact(&1, redactions))
-
-  defp redact(value, redactions) when is_binary(value) do
-    Enum.reduce(redactions, value, fn secret, acc -> String.replace(acc, secret, "[REDACTED]") end)
-  end
-
-  defp redact(value, _redactions), do: value
 
   defp fetch_option(opts, key) do
     case Keyword.fetch(opts, key) do

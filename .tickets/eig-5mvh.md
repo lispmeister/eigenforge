@@ -1,7 +1,7 @@
 ---
 id: eig-5mvh
 status: open
-deps: [eig-glzz, eig-zohd]
+deps: [eig-glzz, eig-zohd, eig-9oxm]
 links: [eig-xs66, eig-l5tk, eig-glzz]
 created: 2026-05-10T05:36:54Z
 type: feature

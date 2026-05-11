@@ -17,6 +17,7 @@ defmodule Eigenforge.Trace do
   alias Eigenforge.Core.CommandIssuer
   alias Eigenforge.Core.PolicyEngine
   alias Eigenforge.Core.Reasoner
+  alias Eigenforge.Core.Redaction
   alias Eigenforge.Core.Reasoners.Co2Rules
   alias Eigenforge.Core.SimulatorFixture
   alias Eigenforge.Core.SnapshotBuilder
@@ -78,7 +79,7 @@ defmodule Eigenforge.Trace do
           "verification" => verify_trace(ledger_events, command, delivery, after_action)
         }
 
-      {:ok, trace}
+      {:ok, Redaction.redact(trace, secrets: redaction_secrets())}
     end
   end
 
@@ -347,6 +348,15 @@ defmodule Eigenforge.Trace do
 
   defp secret do
     Application.fetch_env!(:eigenforge_core, :hmac_secret)
+  end
+
+  defp redaction_secrets do
+    runtime_env =
+      Application.get_env(:eigenforge_core, :runtime_env, %{})
+      |> Enum.into(%{}, fn {key, value} -> {to_string(key), value} end)
+
+    [secret(), runtime_env["HOME_ASSISTANT_TOKEN"]]
+    |> Enum.reject(&(&1 in [nil, ""]))
   end
 
   defp timestamp, do: CanonicalTime.trace_start()

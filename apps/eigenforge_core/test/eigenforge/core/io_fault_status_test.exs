@@ -85,6 +85,27 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
     assert :ok = LedgerTooling.verify(db_path, "core_a", secret)
   end
 
+  test "redacts sensitive key names in log payloads even when only the field name is sensitive", %{
+    log_path: log_path,
+    io_fault_status: io_fault_status
+  } do
+    assert {:ok, _event} =
+             IoFaultStatus.record(io_fault_status, %{
+               source: "home_assistant",
+               fault_type: "adapter_execution_failed",
+               metadata: %{
+                 "HOME_ASSISTANT_TOKEN" => "raw-token",
+                 "nested" => %{"password" => "raw-password"}
+               },
+               audit: true
+             })
+
+    log_body = File.read!(log_path)
+    refute log_body =~ "raw-token"
+    refute log_body =~ "raw-password"
+    assert log_body =~ "[REDACTED]"
+  end
+
   test "connection transitions persist only once per correlation", %{
     db_path: db_path,
     io_fault_status: io_fault_status

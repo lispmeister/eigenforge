@@ -81,12 +81,19 @@ defmodule Eigenforge.IO.HomeAssistantClient do
         Keyword.get(opts, :command_execution_store, Eigenforge.IO.CommandExecutionStore),
       transport: Keyword.get(opts, :transport, __MODULE__.Transport.Noop),
       command_observer: Keyword.get(opts, :command_observer),
+      utc_now: Keyword.get(opts, :utc_now, &DateTime.utc_now/0),
+      monotonic_now_ms: Keyword.get(opts, :monotonic_now_ms, fn -> System.monotonic_time(:millisecond) end),
       connected?: false,
       physical_control_enabled?: false,
       conn: nil,
       reconnect_attempt: 0,
       last_snapshot_seq: 0
     }
+
+    state =
+      state
+      |> Map.put(:started_at_utc, current_utc(state))
+      |> Map.put(:started_monotonic_ms, current_monotonic_ms(state))
 
     send(self(), :connect)
     {:ok, state}
@@ -117,7 +124,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
                 initial_states,
                 [
                   snapshot_seq: next_state.last_snapshot_seq + 1,
-                  normalized_at: "2026-05-11T00:00:00.000Z"
+                  normalized_at: timestamp(state)
                 ],
                 next_state
               )
@@ -145,7 +152,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
                raw_states,
                [
                  snapshot_seq: state.last_snapshot_seq + 1,
-                 normalized_at: timestamp()
+                 normalized_at: timestamp(state)
                ],
                state
              ) do
@@ -212,14 +219,14 @@ defmodule Eigenforge.IO.HomeAssistantClient do
 
   defp verify_and_dispatch(%{"command" => command, "receipt" => receipt}, state)
        when is_map(command) and is_map(receipt) do
-    with :ok <- verify_delivery(command, receipt, state.hmac_secret),
+    with :ok <- verify_delivery(command, receipt, state),
          {:ok, result} <- dispatch_command(command, Map.put(state, :current_command, command)),
          :ok <-
            CommandPublisher.mark_io_accepted(
              receipt["receipt_id"],
              %{
-               accepted_at: timestamp(),
-               accepted_monotonic_ms: System.monotonic_time(:millisecond)
+               accepted_at: timestamp(state),
+               accepted_monotonic_ms: current_monotonic_ms(state)
              },
              receipt_store: state.mailbox_receipt_store
            ) do
@@ -229,12 +236,12 @@ defmodule Eigenforge.IO.HomeAssistantClient do
 
   defp verify_and_dispatch(command, state) when is_map(command), do: dispatch_command(command, state)
 
-  defp verify_delivery(command, receipt, secret) do
+  defp verify_delivery(command, receipt, state) do
     cond do
-      not Contracts.verify_hmac(command, secret, command["signature"], "eigenforge:v1:command_envelope") ->
+      not valid_signature?(command, command["signature"], state.hmac_secret, "eigenforge:v1:command_envelope") ->
         {:error, :invalid_command_signature}
 
-      not Contracts.verify_hmac(receipt, secret, receipt["signature"], "eigenforge:v1:delivery_receipt") ->
+      not valid_signature?(receipt, receipt["signature"], state.hmac_secret, "eigenforge:v1:delivery_receipt") ->
         {:error, :invalid_delivery_receipt_signature}
 
       receipt["command_id"] != command["command_id"] ->
@@ -243,7 +250,13 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       receipt["decision_event_id"] != command["decision_event_id"] ->
         {:error, :receipt_decision_mismatch}
 
-      expired?(command["expires_at"]) ->
+      blank?(receipt["ledger_event_hash"]) ->
+        {:error, :missing_committed_ledger_reference}
+
+      not is_integer(receipt["ledger_sequence"]) or receipt["ledger_sequence"] <= 0 ->
+        {:error, :missing_committed_ledger_reference}
+
+      command_expired?(command, state) ->
         {:error, :command_expired}
 
       true ->
@@ -258,7 +271,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       room_id: state.room_id,
       snapshot_id: Map.get(opts_map, :snapshot_id, "ha-snapshot-#{state.last_snapshot_seq + 1}"),
       snapshot_seq: Map.get(opts_map, :snapshot_seq, state.last_snapshot_seq + 1),
-      normalized_at: Map.get(opts_map, :normalized_at, "2026-05-11T00:00:00.000Z")
+      normalized_at: Map.get(opts_map, :normalized_at, timestamp(state))
     ]
 
     case HomeAssistantAdapter.normalize_snapshot(state.home_assistant.entity_ids, raw_states, normalize_opts) do
@@ -303,7 +316,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
                  requested_state: state.current_command["requested_state"],
                  adapter_attempt_id: "adapter-attempt:" <> state.current_command["command_id"],
                  execution_status: "io_accepted",
-                 recorded_at: timestamp()
+                 recorded_at: timestamp(state)
                }) do
           maybe_notify_command_observer(state.command_observer, request, result)
           {:ok, result}
@@ -333,7 +346,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       message: inspect(reason),
       audit: true,
       source_received_seq: state.last_snapshot_seq + 1,
-      source_received_monotonic_ms: System.monotonic_time(:millisecond),
+      source_received_monotonic_ms: current_monotonic_ms(state),
       metadata: %{
         "command_id" => command["command_id"],
         "target" => command["target"]
@@ -351,18 +364,47 @@ defmodule Eigenforge.IO.HomeAssistantClient do
     end
   end
 
-  defp expired?(timestamp) when is_binary(timestamp) do
-    case DateTime.from_iso8601(timestamp) do
-      {:ok, expires_at, _offset} -> DateTime.compare(DateTime.utc_now(), expires_at) == :gt
-      _ -> true
+  defp monotonic_deadline_ms(timestamp, state) do
+    case absolute_deadline_ms(timestamp, state) do
+      deadline_ms when is_integer(deadline_ms) ->
+        if deadline_ms >= current_monotonic_ms(state), do: deadline_ms, else: nil
+
+      _ ->
+        nil
     end
   end
 
-  defp timestamp do
-    DateTime.utc_now()
+  defp absolute_deadline_ms(timestamp, state) do
+    with {:ok, expires_at, _offset} <- DateTime.from_iso8601(timestamp) do
+      delta_ms = DateTime.diff(expires_at, state.started_at_utc, :millisecond)
+      state.started_monotonic_ms + delta_ms
+    else
+      _ -> nil
+    end
+  end
+
+  defp timestamp(state) do
+    state
+    |> current_utc()
     |> DateTime.truncate(:millisecond)
     |> DateTime.to_iso8601()
   end
+
+  defp current_utc(state), do: state.utc_now.()
+  defp current_monotonic_ms(state), do: state.monotonic_now_ms.()
+  defp blank?(value), do: value in [nil, ""]
+  defp command_expired?(command, state) do
+    case monotonic_deadline_ms(command["expires_at"], state) do
+      deadline_ms when is_integer(deadline_ms) -> current_monotonic_ms(state) > deadline_ms
+      nil -> true
+    end
+  end
+
+  defp valid_signature?(payload, signature, secret, purpose) when is_binary(signature) do
+    Contracts.verify_hmac(payload, secret, signature, purpose)
+  end
+
+  defp valid_signature?(_payload, _signature, _secret, _purpose), do: false
 
   defmodule Transport do
     @callback connect(String.t(), String.t()) :: {:ok, term(), map()} | {:error, term()}

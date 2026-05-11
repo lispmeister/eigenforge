@@ -108,6 +108,37 @@ defmodule Eigenforge.Mailbox.ReceiptStoreTest do
              )
   end
 
+  test "restart bootstrap rejects tampered manifests and does not publish while degraded", %{
+    path: path,
+    registry_name: registry_name
+  } do
+    assert {:ok, _} = CommandPublisher.subscribe("commands:io", registry_name: registry_name)
+
+    manifest_path = path <> ".manifest.json"
+
+    tampered_manifest =
+      manifest_path
+      |> File.read!()
+      |> Contracts.decode_json!()
+      |> Map.put("signature", "tampered")
+
+    File.write!(manifest_path, Contracts.canonical_json(tampered_manifest) <> "\n")
+
+    degraded_name = Module.concat(__MODULE__, "ManifestTampered#{System.unique_integer([:positive])}")
+    restarted = start_supervised!({ReceiptStore, path: path, secret: "mailbox-secret", name: degraded_name})
+
+    assert {:error, :receipt_store_unavailable} =
+             CommandPublisher.publish("commands:io", command(),
+               registry_name: registry_name,
+               receipt_store: restarted,
+               ledger_sequence: 7,
+               ledger_event_hash: String.duplicate("f", 64),
+               decision_event_id: "event-4"
+             )
+
+    refute_receive {:mailbox_command, "commands:io", _payload}, 300
+  end
+
   test "publisher wraps command and receipt and records publish_attempted", %{
     registry_name: registry_name,
     store: store

@@ -59,10 +59,17 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
       after_action_timeout_ms: Keyword.get(opts, :after_action_timeout_ms, 3_000),
       reasoner_module: Keyword.get(opts, :reasoner_module, Co2Rules),
       after_action_observer: Keyword.get(opts, :after_action_observer, AfterActionObserver),
+      utc_now: Keyword.get(opts, :utc_now, &DateTime.utc_now/0),
+      monotonic_now_ms: Keyword.get(opts, :monotonic_now_ms, fn -> System.monotonic_time(:millisecond) end),
       secret: Keyword.fetch!(opts, :secret),
       processed_snapshot_ids: MapSet.new(),
       pending_commands: %{}
     }
+
+    state =
+      state
+      |> Map.put(:started_at_utc, current_utc(state))
+      |> Map.put(:started_monotonic_ms, current_monotonic_ms(state))
 
     {:ok, recover_pending_commands(state)}
   end
@@ -126,8 +133,9 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
          {:ok, appended_events} <- append_payloads(payloads, snapshot, refs, state) do
       if guarded_command do
         command_event = Map.fetch!(appended_events, "command_envelope_issued")
+        next_state = register_pending_command(guarded_command, snapshot, refs, state)
 
-        :ok =
+        _ =
           CommandPublisher.publish("commands:io", guarded_command,
             registry_name: state.mailbox_registry,
             receipt_store: state.mailbox_receipt_store,
@@ -136,7 +144,7 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
             decision_event_id: command_event.event_id
           )
 
-        {:ok, register_pending_command(guarded_command, snapshot, refs, state)}
+        {:ok, next_state}
       else
         {:ok, state}
       end
@@ -261,7 +269,12 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   end
 
   defp register_pending_command(command, snapshot, refs, state) do
-    timer_ref = Process.send_after(self(), {:after_action_timeout, command.command_id}, state.after_action_timeout_ms)
+    timer_ref =
+      Process.send_after(
+        self(),
+        {:after_action_timeout, command.command_id},
+        timeout_ms_for_pending(command, state.after_action_timeout_ms, state)
+      )
 
     pending = %{
       command: command,
@@ -330,9 +343,9 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
         state
 
       {:ok, pending} ->
-        timeout_ms = recovered_timeout_ms(pending, state.after_action_timeout_ms)
+        timeout_ms = recovered_timeout_ms(pending, state)
 
-        if expired?(pending.command.expires_at) or timeout_ms == 0 do
+        if expired?(pending.command.expires_at, state) or timeout_ms == 0 do
           maybe_record_recovery_timeout(state, pending)
         else
           register_recovered_pending_command(state, pending, timeout_ms)
@@ -439,12 +452,12 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     end
   end
 
-  defp recovered_timeout_ms(pending, default_timeout_ms) do
+  defp recovered_timeout_ms(pending, %{after_action_timeout_ms: default_timeout_ms} = state) do
     pending.receipt_entry
     |> timeout_deadline(default_timeout_ms, pending.command.expires_at)
     |> case do
       %DateTime{} = deadline ->
-        remaining_ms = DateTime.diff(deadline, DateTime.utc_now(), :millisecond)
+        remaining_ms = remaining_until(deadline, state)
         max(0, remaining_ms)
 
       nil ->
@@ -555,12 +568,53 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     end
   end
 
-  defp expired?(timestamp) when is_binary(timestamp) do
-    case parse_timestamp(timestamp) do
-      %DateTime{} = expires_at -> DateTime.compare(DateTime.utc_now(), expires_at) == :gt
+  defp expired?(timestamp, state) when is_binary(timestamp) do
+    case monotonic_deadline_ms(timestamp, state) do
+      deadline_ms when is_integer(deadline_ms) -> current_monotonic_ms(state) > deadline_ms
       nil -> true
     end
   end
+
+  defp timeout_ms_for_pending(command, default_timeout_ms, _state) do
+    case command_lifetime_ms(command) do
+      lifetime_ms when is_integer(lifetime_ms) and lifetime_ms > 0 ->
+        min(default_timeout_ms, lifetime_ms)
+
+      _ ->
+        default_timeout_ms
+    end
+  end
+
+  defp remaining_until(%DateTime{} = deadline, state) do
+    delta_ms = DateTime.diff(deadline, state.started_at_utc, :millisecond)
+    deadline_ms = state.started_monotonic_ms + delta_ms
+    deadline_ms - current_monotonic_ms(state)
+  end
+
+  defp monotonic_deadline_ms(timestamp, state) when is_binary(timestamp) do
+    case parse_timestamp(timestamp) do
+      %DateTime{} = deadline ->
+        delta_ms = DateTime.diff(deadline, state.started_at_utc, :millisecond)
+        state.started_monotonic_ms + delta_ms
+
+      nil ->
+        nil
+    end
+  end
+
+  defp command_lifetime_ms(command) do
+    with issued_at when is_binary(issued_at) <- command.issued_at,
+         expires_at when is_binary(expires_at) <- command.expires_at,
+         %DateTime{} = issued_dt <- parse_timestamp(issued_at),
+         %DateTime{} = expires_dt <- parse_timestamp(expires_at) do
+      max(0, DateTime.diff(expires_dt, issued_dt, :millisecond))
+    else
+      _ -> nil
+    end
+  end
+
+  defp current_utc(state), do: state.utc_now.()
+  defp current_monotonic_ms(state), do: state.monotonic_now_ms.()
 
   defp event_type(%Eigenforge.Contracts.PolicyDecision{decision: "deny_stale_snapshot"}),
     do: "stale_snapshot_denied"

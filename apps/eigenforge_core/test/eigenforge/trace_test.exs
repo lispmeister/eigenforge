@@ -19,7 +19,13 @@ defmodule Eigenforge.TraceTest do
 
     assert [%{"requested_state" => "on"}] = trace["command_envelopes"]
     assert [%{"status" => "confirmed_changed", "observed_state" => "on"}] = trace["after_actions"]
-    assert Enum.any?(trace["ledger_events"], &(&1["event_type"] == "command_envelope_issued"))
+    assert_event_types(trace, [
+      "reasoner_outcome_recorded",
+      "capability_check_recorded",
+      "policy_decision_recorded",
+      "command_envelope_issued",
+      "after_action_recorded"
+    ])
     assert_local_sqlite_consensus(trace)
   end
 
@@ -35,8 +41,10 @@ defmodule Eigenforge.TraceTest do
 
     assert trace["command_envelopes"] == []
     assert trace["delivery_receipts"] == []
-    refute Enum.any?(trace["ledger_events"], &(&1["event_type"] == "capability_check_recorded"))
-    refute Enum.any?(trace["ledger_events"], &(&1["event_type"] == "command_envelope_issued"))
+    assert_event_types(trace, [
+      "reasoner_outcome_recorded",
+      "policy_decision_recorded"
+    ])
     assert_local_sqlite_consensus(trace)
   end
 
@@ -51,9 +59,49 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "command_envelope") == "not_delivered"
 
     assert trace["command_envelopes"] == []
-    refute Enum.any?(trace["ledger_events"], &(&1["event_type"] == "capability_check_recorded"))
-    assert Enum.any?(trace["ledger_events"], &(&1["event_type"] == "stale_snapshot_denied"))
+    assert_event_types(trace, [
+      "reasoner_outcome_recorded",
+      "stale_snapshot_denied"
+    ])
     assert_local_sqlite_consensus(trace)
+  end
+
+  test "low CO2 with fan already on issues a fan-off command" do
+    trace = run_fixture_file!("co2_low_fan_on")
+
+    assert step(trace, "reasoner_outcome") == "propose_action"
+    assert step(trace, "policy_decision") == "allow"
+    assert [%{"requested_state" => "off"}] = trace["command_envelopes"]
+    assert_event_types(trace, [
+      "reasoner_outcome_recorded",
+      "capability_check_recorded",
+      "policy_decision_recorded",
+      "command_envelope_issued",
+      "after_action_recorded"
+    ])
+  end
+
+  test "fixture-backed nominal CO2 path records no-threshold decision without capability check" do
+    trace = run_fixture_file!("co2_nominal_fan_off")
+
+    assert step(trace, "reasoner_outcome") == "no_threshold_event"
+    assert step(trace, "capability_check") == "not_checked"
+    assert step(trace, "policy_decision") == "no_command"
+    assert_event_types(trace, [
+      "reasoner_outcome_recorded",
+      "policy_decision_recorded"
+    ])
+  end
+
+  test "malformed CO2 fixtures deny action without a command" do
+    trace = run_fixture_file!("co2_malformed")
+
+    assert step(trace, "capability_check") == "not_checked"
+    assert step(trace, "policy_decision") == "deny_stale_snapshot"
+    assert_event_types(trace, [
+      "reasoner_outcome_recorded",
+      "stale_snapshot_denied"
+    ])
   end
 
   test "nominal CO2 path records no-threshold decision without capability check" do
@@ -67,8 +115,10 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "reasoner_outcome") == "no_threshold_event"
     assert step(trace, "capability_check") == "not_checked"
     assert step(trace, "policy_decision") == "no_command"
-    refute Enum.any?(trace["ledger_events"], &(&1["event_type"] == "capability_check_recorded"))
-    refute Enum.any?(trace["ledger_events"], &(&1["event_type"] == "command_envelope_issued"))
+    assert_event_types(trace, [
+      "reasoner_outcome_recorded",
+      "policy_decision_recorded"
+    ])
   end
 
   test "committed golden traces verify" do
@@ -143,6 +193,14 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "reasoner_outcome") == "propose_action"
     assert step(trace, "policy_decision") == "allow"
     assert step(trace, "command_envelope") == "issued"
+    assert step(trace, "capability_check") == "allow"
+    assert_event_types(trace, [
+      "reasoner_outcome_recorded",
+      "capability_check_recorded",
+      "policy_decision_recorded",
+      "command_envelope_issued",
+      "after_action_recorded"
+    ])
   end
 
   test "malformed fan state does not block idempotent fan commands" do
@@ -173,6 +231,12 @@ defmodule Eigenforge.TraceTest do
     trace
   end
 
+  defp run_fixture_file!(name) do
+    fixture = Path.join(@fixtures_dir, "#{name}.json")
+    assert {:ok, trace} = Eigenforge.Trace.run_file(fixture)
+    trace
+  end
+
   defp run_fixture!(fixture) do
     assert {:ok, trace} = Eigenforge.Trace.run(fixture, "inline-fixture")
     trace
@@ -182,6 +246,10 @@ defmodule Eigenforge.TraceTest do
     trace["ledger_events"]
     |> Enum.find(&(&1["event_type"] == "reasoner_outcome_recorded"))
     |> then(& &1["payload"]["snapshot_hash"])
+  end
+
+  defp assert_event_types(trace, expected_types) do
+    assert Enum.map(trace["ledger_events"], & &1["event_type"]) == expected_types
   end
 
   defp base_fixture do

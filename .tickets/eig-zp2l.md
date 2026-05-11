@@ -1,7 +1,7 @@
 ---
 id: eig-zp2l
 status: open
-deps: [eig-l5tk, eig-xtqn, eig-zohd]
+deps: [eig-l5tk, eig-xtqn, eig-zohd, eig-9w4k]
 links: [eig-l5tk, eig-runa, eig-xtqn]
 created: 2026-05-10T05:36:53Z
 type: feature

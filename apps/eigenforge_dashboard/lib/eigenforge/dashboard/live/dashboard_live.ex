@@ -1,6 +1,7 @@
 defmodule Eigenforge.Dashboard.DashboardLive do
   use Phoenix.LiveView
 
+  alias Eigenforge.Core.Redaction
   alias Eigenforge.Dashboard.DashboardState
 
   @refresh_ms 1_000
@@ -277,7 +278,13 @@ defmodule Eigenforge.Dashboard.DashboardLive do
         socket |> assign(:state, state) |> assign(:error, nil)
 
       {:error, reason} ->
-        socket |> assign(:error, inspect(reason))
+        socket
+        |> assign(
+          :error,
+          reason
+          |> inspect()
+          |> Redaction.redact(secrets: DashboardState.redaction_secrets())
+        )
     end
   end
 

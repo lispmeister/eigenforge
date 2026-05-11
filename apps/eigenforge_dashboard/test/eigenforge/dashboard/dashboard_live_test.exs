@@ -105,4 +105,26 @@ defmodule Eigenforge.Dashboard.DashboardLiveTest do
 
     assert count_after == count_before
   end
+
+  test "redacts configured secrets from dashboard error banners", %{conn: conn} do
+    Application.put_env(:eigenforge_core, :runtime_env, %{
+      "EIGENFORGE_IO_MODE" => "simulator",
+      "EIGENFORGE_HMAC_SECRET" => "replace_me",
+      "EIGENFORGE_CORE_NODE_ID" => "core_a",
+      "EIGENFORGE_CORE_DB_PATH" =>
+        Path.join(System.tmp_dir!(), "dashboard-live-error-ha-secret-token.sqlite3"),
+      "EIGENFORGE_DEVICE_INVENTORY_PATH" =>
+        Path.join(System.tmp_dir!(), "ha-secret-token-devices.json"),
+      "EIGENFORGE_DEVICE_INVENTORY_SIG_PATH" =>
+        Path.join(System.tmp_dir!(), "ha-secret-token-devices.json.sig"),
+      "EIGENFORGE_CAPABILITY_GRANTS_DIR" => Path.expand("../../../../../config/capabilities", __DIR__),
+      "EIGENFORGE_SIMULATOR_SNAPSHOTS_DIR" => Path.expand("../../../../../config/simulator_snapshots", __DIR__),
+      "EIGENFORGE_IO_FAULT_STATUS_LOG" => Path.join(System.tmp_dir!(), "dashboard-live-error.log"),
+      "HOME_ASSISTANT_TOKEN" => "ha-secret-token"
+    })
+
+    assert {:ok, _view, html} = live(conn, "/")
+    assert html =~ "[REDACTED]"
+    refute html =~ "ha-secret-token"
+  end
 end

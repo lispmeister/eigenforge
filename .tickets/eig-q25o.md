@@ -1,7 +1,7 @@
 ---
 id: eig-q25o
 status: open
-deps: [eig-ibl4, eig-tzyb]
+deps: [eig-ibl4, eig-tzyb, eig-icur]
 links: []
 created: 2026-05-10T05:06:54Z
 type: feature

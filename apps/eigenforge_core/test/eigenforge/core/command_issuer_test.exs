@@ -43,6 +43,42 @@ defmodule Eigenforge.Core.CommandIssuerTest do
     refute command_with_fan.effect_key == command_without_fan.effect_key
   end
 
+  test "distinct consensus decisions produce distinct idempotency keys" do
+    snapshot = snapshot("obs-fan-1")
+    reasoner = reasoner(snapshot, "outcome-1")
+    policy = policy(snapshot, reasoner, "policy-1")
+
+    assert {:ok, first_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret,
+               consensus_decision_id: "consensus-1"
+             )
+
+    assert {:ok, second_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret,
+               consensus_decision_id: "consensus-2"
+             )
+
+    refute first_command.idempotency_key == second_command.idempotency_key
+  end
+
+  test "the same finalized decision keeps the same idempotency key" do
+    snapshot = snapshot("obs-fan-1")
+    reasoner = reasoner(snapshot, "outcome-1")
+    policy = policy(snapshot, reasoner, "policy-1")
+
+    assert {:ok, first_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret,
+               consensus_decision_id: "consensus-1"
+             )
+
+    assert {:ok, second_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret,
+               consensus_decision_id: "consensus-1"
+             )
+
+    assert first_command.idempotency_key == second_command.idempotency_key
+  end
+
   defp snapshot(fan_observation_id) do
     source_observation_ids =
       if fan_observation_id do

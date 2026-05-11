@@ -1,7 +1,7 @@
 ---
 id: eig-i05s
 status: open
-deps: [eig-eudn, eig-cj5v, eig-5906]
+deps: [eig-eudn, eig-cj5v, eig-5906, eig-d2o0]
 links: []
 created: 2026-05-10T05:23:08Z
 type: task

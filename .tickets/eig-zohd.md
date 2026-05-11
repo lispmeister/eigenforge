@@ -1,7 +1,7 @@
 ---
 id: eig-zohd
 status: open
-deps: [eig-xtqn, eig-glzz]
+deps: [eig-xtqn, eig-glzz, eig-9oxm]
 links: []
 created: 2026-05-10T05:23:08Z
 type: feature

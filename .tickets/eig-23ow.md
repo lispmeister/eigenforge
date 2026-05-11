@@ -1,6 +1,6 @@
 ---
 id: eig-23ow
-status: open
+status: closed
 deps: [eig-l5tk, eig-cj5v]
 links: []
 created: 2026-05-10T05:07:09Z

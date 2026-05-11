@@ -5,15 +5,18 @@ defmodule Eigenforge.Dashboard.ReadModel do
 
   alias Eigenforge.Contracts
   alias Eigenforge.Core.LedgerProjections
+  alias Eigenforge.Core.Redaction
 
   @spec snapshot(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def snapshot(db_path, room_id, opts \\ []) when is_binary(db_path) and is_binary(room_id) do
     limit = Keyword.get(opts, :limit, 10)
+    redaction_secrets = Keyword.get(opts, :redaction_secrets, [])
 
     with {:ok, room_state} <- latest_room_state(db_path, room_id),
-         {:ok, recent_ledger_events} <- recent_ledger_events(db_path, room_id, limit),
+         {:ok, recent_ledger_events} <-
+           recent_ledger_events(db_path, room_id, limit, redaction_secrets),
          {:ok, recent_chains} <- recent_control_chains(db_path, room_id, limit),
-         {:ok, recent_faults} <- recent_faults(db_path, room_id, limit) do
+         {:ok, recent_faults} <- recent_faults(db_path, room_id, limit, redaction_secrets) do
       {:ok,
        %{
          "room_id" => room_id,
@@ -57,7 +60,7 @@ defmodule Eigenforge.Dashboard.ReadModel do
     end
   end
 
-  defp recent_ledger_events(db_path, room_id, limit) do
+  defp recent_ledger_events(db_path, room_id, limit, redaction_secrets) do
     sql = """
     SELECT event_type, persisted_at, payload
     FROM ledger_events
@@ -74,7 +77,10 @@ defmodule Eigenforge.Dashboard.ReadModel do
            %{
              "event_type" => row["event_type"],
              "persisted_at" => row["persisted_at"],
-             "payload" => Contracts.decode_json!(row["payload"])
+             "payload" =>
+               row["payload"]
+               |> Contracts.decode_json!()
+               |> Redaction.redact(secrets: redaction_secrets)
            }
          end)}
 
@@ -95,7 +101,7 @@ defmodule Eigenforge.Dashboard.ReadModel do
     )
   end
 
-  defp recent_faults(db_path, room_id, limit) do
+  defp recent_faults(db_path, room_id, limit, redaction_secrets) do
     sql = """
     SELECT event_type, persisted_at, payload
     FROM ledger_events
@@ -112,7 +118,10 @@ defmodule Eigenforge.Dashboard.ReadModel do
            %{
              "event_type" => row["event_type"],
              "persisted_at" => row["persisted_at"],
-             "payload" => Contracts.decode_json!(row["payload"])
+             "payload" =>
+               row["payload"]
+               |> Contracts.decode_json!()
+               |> Redaction.redact(secrets: redaction_secrets)
            }
          end)}
 

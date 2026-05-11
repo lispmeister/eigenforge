@@ -1,6 +1,6 @@
 ---
 id: eig-xtqn
-status: open
+status: closed
 deps: [eig-cj5v]
 links: [eig-l5tk, eig-runa, eig-zp2l]
 created: 2026-05-09T14:11:31Z

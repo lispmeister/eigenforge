@@ -81,4 +81,33 @@ defmodule Eigenforge.Dashboard.ReadModelTest do
     assert [%{"count(*)" => count}] = count_rows
     assert count >= 2
   end
+
+  test "redacts secrets from decoded ledger payloads before exposing dashboard state", %{
+    db_path: db_path,
+    writer: writer
+  } do
+    assert {:ok, _} =
+             LedgerWriter.append(writer, %{
+               event_type: "io_fault_observed",
+               subject: "io_adapter",
+               source_app: "eigenforge_core",
+               payload: %{
+                 "room_id" => "placeholder",
+                 "fault_type" => "adapter_execution_failed",
+                 "metadata" => %{
+                   "HOME_ASSISTANT_TOKEN" => "ha-secret-token",
+                   "detail" => "EIGENFORGE_HMAC_SECRET=dashboard-secret"
+                 }
+               }
+             })
+
+    assert {:ok, view} =
+             ReadModel.snapshot(db_path, "placeholder",
+               redaction_secrets: ["ha-secret-token", "dashboard-secret"]
+             )
+
+    [fault | _] = view["recent_io_faults"]
+    assert get_in(fault, ["payload", "metadata", "HOME_ASSISTANT_TOKEN"]) == "[REDACTED]"
+    assert get_in(fault, ["payload", "metadata", "detail"]) =~ "[REDACTED]"
+  end
 end

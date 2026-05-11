@@ -12,7 +12,7 @@ defmodule Eigenforge.IO.HomeAssistantAdapter do
   @spec next_backoff_ms(non_neg_integer(), pos_integer()) :: pos_integer()
   def next_backoff_ms(attempt, max_ms) when is_integer(attempt) and attempt >= 0 and is_integer(max_ms) and max_ms > 0 do
     attempt
-    |> then(fn n -> trunc(:math.pow(2, n) * 1_000) end)
+    |> then(fn n -> trunc(:math.pow(2, n) * 5_000) end)
     |> min(max_ms)
   end
 
