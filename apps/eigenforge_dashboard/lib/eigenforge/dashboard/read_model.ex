@@ -17,6 +17,8 @@ defmodule Eigenforge.Dashboard.ReadModel do
            recent_ledger_events(db_path, room_id, limit, redaction_secrets),
          {:ok, recent_chains} <- recent_control_chains(db_path, room_id, limit),
          {:ok, recent_faults} <- recent_faults(db_path, room_id, limit, redaction_secrets) do
+      latest_chain = List.first(recent_chains) || %{}
+
       {:ok,
        %{
          "room_id" => room_id,
@@ -37,13 +39,17 @@ defmodule Eigenforge.Dashboard.ReadModel do
            "state" => room_state["fan_state"],
            "status" => room_state["fan_status"]
          },
+         "reasoner_outcome" => latest_chain["reasoner_outcome"] || "not_yet_observed",
          "reasoner_outcome_id" => room_state["latest_reasoner_outcome_id"],
+         "policy_decision" => latest_chain["policy_decision"] || "not_yet_observed",
          "policy_decision_id" => room_state["latest_policy_decision_id"],
          "last_command_id" => room_state["latest_command_id"],
+         "after_action_status" => latest_chain["after_action_status"] || "not_yet_observed",
          "last_after_action_id" => room_state["latest_after_action_id"],
          "command_lifecycle" => room_state["command_lifecycle"] || "not_yet_observed",
          "recent_control_chains" => recent_chains,
          "recent_ledger_events" => recent_ledger_events,
+         "recent_io_events" => recent_faults,
          "recent_io_faults" => recent_faults
        }}
     end

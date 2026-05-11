@@ -95,22 +95,25 @@ defmodule Eigenforge.Dashboard.DashboardLive do
           <div><dt>Room</dt><dd><%= dash(@state["room_id"]) %></dd></div>
           <div><dt>Simulator</dt><dd><%= if @state["simulator_mode"], do: "yes", else: "no" %></dd></div>
           <div><dt>Stale alert</dt><dd><%= if @state["stale_sensor_alert"], do: "active", else: "clear" %></dd></div>
-          <div><dt>Reasoner outcome</dt><dd><%= dash(@state["reasoner_outcome_id"]) %></dd></div>
-          <div><dt>Policy decision</dt><dd><%= dash(@state["policy_decision_id"]) %></dd></div>
+          <div><dt>Reasoner outcome</dt><dd><%= dash(@state["reasoner_outcome"]) %></dd></div>
+          <div><dt>Policy decision</dt><dd><%= dash(@state["policy_decision"]) %></dd></div>
           <div><dt>Last command</dt><dd><%= dash(@state["last_command_id"]) %></dd></div>
-          <div><dt>After-action</dt><dd><%= dash(@state["last_after_action_id"]) %></dd></div>
+          <div><dt>After-action</dt><dd><%= dash(@state["after_action_status"]) %></dd></div>
           <div><dt>Lifecycle</dt><dd><%= dash(@state["command_lifecycle"]) %></dd></div>
         </dl>
       </article>
 
       <article class="panel detail">
-        <h2>Recent IO Faults</h2>
-        <ul class="event-list">
-          <li :for={fault <- @state["recent_io_faults"] || []}>
-            <strong><%= fault["payload"]["fault_type"] %></strong>
-            <span><%= fault["persisted_at"] %></span>
+        <h2>Recent IO Events</h2>
+        <ul class="event-list detailed-events">
+          <li :for={event <- @state["recent_io_events"] || []}>
+            <div>
+              <strong><%= event["payload"]["fault_type"] %></strong>
+              <p><%= dash(event["payload"]["source"]) %> · <%= event["event_type"] %></p>
+            </div>
+            <span><%= event["persisted_at"] %></span>
           </li>
-          <li :if={Enum.empty?(@state["recent_io_faults"] || [])}>No recent IO faults.</li>
+          <li :if={Enum.empty?(@state["recent_io_events"] || [])}>No recent IO events.</li>
         </ul>
       </article>
     </section>
@@ -242,6 +245,12 @@ defmodule Eigenforge.Dashboard.DashboardLive do
         gap: 16px;
         padding: 12px 0;
         border-bottom: 1px solid var(--border);
+      }
+
+      .detailed-events p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 0.9rem;
       }
 
       .status-ok { color: var(--ok); }

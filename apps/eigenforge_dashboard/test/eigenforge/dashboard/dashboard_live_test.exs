@@ -95,6 +95,7 @@ defmodule Eigenforge.Dashboard.DashboardLiveTest do
     assert html =~ "Read-only control surface"
     assert html =~ "1200 ppm"
     assert html =~ "recovered"
+    assert html =~ "Recent IO Events"
     assert html =~ "No recent ledger events yet" or html =~ "Recent Ledger Events"
 
     assert {:ok, [%{"count(*)" => count_after}]} =
