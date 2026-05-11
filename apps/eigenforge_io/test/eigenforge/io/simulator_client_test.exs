@@ -6,6 +6,7 @@ defmodule Eigenforge.IO.SimulatorClientTest do
   alias Eigenforge.Core.LedgerWriter
   alias Eigenforge.Core.SnapshotSubscriber
   alias Eigenforge.Mailbox.CommandPublisher
+  alias Eigenforge.Mailbox.ReceiptStore
   alias Eigenforge.IO.SimulatorClient
 
   setup do
@@ -16,6 +17,7 @@ defmodule Eigenforge.IO.SimulatorClientTest do
     pubsub_registry = Module.concat(__MODULE__, "CoreRegistry#{System.unique_integer([:positive])}")
     mailbox_registry = Module.concat(__MODULE__, "MailboxRegistry#{System.unique_integer([:positive])}")
     fault_registry = Module.concat(__MODULE__, "FaultRegistry#{System.unique_integer([:positive])}")
+    receipt_store_name = Module.concat(__MODULE__, "ReceiptStore#{System.unique_integer([:positive])}")
     subscriber_name = Module.concat(__MODULE__, "Subscriber#{System.unique_integer([:positive])}")
     io_fault_status_name = Module.concat(__MODULE__, "IoFaultStatus#{System.unique_integer([:positive])}")
 
@@ -41,11 +43,18 @@ defmodule Eigenforge.IO.SimulatorClientTest do
          name: io_fault_status_name}
       )
 
+    receipt_store =
+      start_supervised!(
+        {ReceiptStore,
+         path: Path.join(dir, "receipts.json"), secret: "sim-secret", name: receipt_store_name}
+      )
+
     start_supervised!(
       {SnapshotSubscriber,
        room_id: "placeholder",
        pubsub_registry: pubsub_registry,
        mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
        writer: writer,
        secret: "sim-secret",
        name: subscriber_name}
@@ -80,11 +89,12 @@ defmodule Eigenforge.IO.SimulatorClientTest do
       name: Module.concat(__MODULE__, "Client#{System.unique_integer([:positive])}")}
       )
 
-    assert_receive {:mailbox_command, "commands:io", high_on_command}, 1_000
-    assert high_on_command["requested_state"] == "on"
+    assert_receive {:mailbox_command, "commands:io", high_on_delivery}, 1_000
+    assert high_on_delivery["command"]["requested_state"] == "on"
+    assert high_on_delivery["receipt"]["command_id"] == high_on_delivery["command"]["command_id"]
 
-    assert_receive {:mailbox_command, "commands:io", low_off_command}, 1_000
-    assert low_off_command["requested_state"] == "off"
+    assert_receive {:mailbox_command, "commands:io", low_off_delivery}, 1_000
+    assert low_off_delivery["command"]["requested_state"] == "off"
 
     event_types =
       wait_for_event_types(db_path, fn event_types ->

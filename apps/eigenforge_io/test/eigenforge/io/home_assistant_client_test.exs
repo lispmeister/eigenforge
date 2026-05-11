@@ -1,0 +1,484 @@
+defmodule Eigenforge.IO.HomeAssistantClientTest do
+  use ExUnit.Case, async: true
+
+  alias Eigenforge.Contracts
+  alias Eigenforge.Contracts.CommandEnvelope
+  alias Eigenforge.Core.IoFaultStatus
+  alias Eigenforge.Core.LedgerSQLite
+  alias Eigenforge.Core.LedgerWriter
+  alias Eigenforge.Core.PubSub
+  alias Eigenforge.IO.CommandExecutionStore
+  alias Eigenforge.IO.HomeAssistantClient
+  alias Eigenforge.Mailbox.CommandPublisher
+  alias Eigenforge.Mailbox.ReceiptStore
+
+  defmodule FlakyTransport do
+    @behaviour Eigenforge.IO.HomeAssistantClient.Transport
+
+    @impl true
+    def connect(_url, _token) do
+      counter = Process.get(:ha_connect_attempts, 0) + 1
+      Process.put(:ha_connect_attempts, counter)
+
+      if counter == 1 do
+        {:error, :econnrefused}
+      else
+        {:ok, :fake_conn, valid_states()}
+      end
+    end
+
+    @impl true
+    def connect(url, token, _opts), do: connect(url, token)
+
+    @impl true
+    def command(_conn, _request) do
+      {:ok, %{accepted: true}}
+    end
+
+    def valid_states do
+      %{
+        "sensor.placeholder_co2" => %{
+          "entity_id" => "sensor.placeholder_co2",
+          "entity_class" => "sensor",
+          "state" => "1200",
+          "observation_id" => "co2-1",
+          "observed_at" => "2026-05-10T12:00:00.000Z",
+          "received_seq" => 10,
+          "received_monotonic_ms" => 100,
+          "status" => "fresh"
+        },
+        "sensor.placeholder_humidity" => %{
+          "entity_id" => "sensor.placeholder_humidity",
+          "entity_class" => "sensor",
+          "state" => "45.0",
+          "observation_id" => "humidity-1",
+          "observed_at" => "2026-05-10T12:00:00.000Z",
+          "received_seq" => 10,
+          "received_monotonic_ms" => 100,
+          "status" => "fresh"
+        },
+        "sensor.placeholder_temperature" => %{
+          "entity_id" => "sensor.placeholder_temperature",
+          "entity_class" => "sensor",
+          "state" => "22.0",
+          "observation_id" => "temperature-1",
+          "observed_at" => "2026-05-10T12:00:00.000Z",
+          "received_seq" => 10,
+          "received_monotonic_ms" => 100,
+          "status" => "fresh"
+        },
+        "switch.placeholder_fan" => %{
+          "entity_id" => "switch.placeholder_fan",
+          "entity_class" => "switch",
+          "state" => "off",
+          "observation_id" => "fan-1",
+          "observed_at" => "2026-05-10T12:00:00.000Z",
+          "received_seq" => 10,
+          "received_monotonic_ms" => 100,
+          "status" => "fresh"
+        }
+      }
+    end
+  end
+
+  defmodule WrongClassTransport do
+    @behaviour Eigenforge.IO.HomeAssistantClient.Transport
+
+    @impl true
+    def connect(_url, _token) do
+      {:ok, :fake_conn, %{
+        "sensor.placeholder_co2" => %{"entity_id" => "sensor.placeholder_co2", "entity_class" => "switch"},
+        "sensor.placeholder_humidity" => %{"entity_id" => "sensor.placeholder_humidity", "entity_class" => "sensor"},
+        "sensor.placeholder_temperature" => %{"entity_id" => "sensor.placeholder_temperature", "entity_class" => "sensor"},
+        "switch.placeholder_fan" => %{"entity_id" => "switch.placeholder_fan", "entity_class" => "switch"}
+      }}
+    end
+
+    @impl true
+    def connect(url, token, _opts), do: connect(url, token)
+
+    @impl true
+    def command(_conn, _request), do: {:ok, %{accepted: true}}
+  end
+
+  defmodule FailingCommandTransport do
+    @behaviour Eigenforge.IO.HomeAssistantClient.Transport
+
+    @impl true
+    def connect(_url, _token), do: {:ok, :fake_conn, FlakyTransport.valid_states()}
+
+    @impl true
+    def connect(url, token, _opts), do: connect(url, token)
+
+    @impl true
+    def command(_conn, _request), do: {:error, :service_unavailable}
+  end
+
+  defmodule DownTransport do
+    @behaviour Eigenforge.IO.HomeAssistantClient.Transport
+
+    @impl true
+    def connect(_url, _token), do: {:error, :econnrefused}
+
+    @impl true
+    def connect(url, token, _opts), do: connect(url, token)
+
+    @impl true
+    def command(_conn, _request), do: {:error, :not_connected}
+  end
+
+  setup do
+    Process.delete(:ha_connect_attempts)
+
+    dir = Path.join(System.tmp_dir!(), "eigenforge-ha-client-#{System.unique_integer([:positive])}")
+    db_path = Path.join(dir, "core.sqlite3")
+    log_path = Path.join(dir, "io_fault_status.log")
+    pubsub_registry = Module.concat(__MODULE__, "CoreRegistry#{System.unique_integer([:positive])}")
+    mailbox_registry = Module.concat(__MODULE__, "MailboxRegistry#{System.unique_integer([:positive])}")
+    fault_registry = Module.concat(__MODULE__, "FaultRegistry#{System.unique_integer([:positive])}")
+    receipt_store_name = Module.concat(__MODULE__, "ReceiptStore#{System.unique_integer([:positive])}")
+    command_store_name = Module.concat(__MODULE__, "CommandStore#{System.unique_integer([:positive])}")
+    io_fault_status_name = Module.concat(__MODULE__, "IoFaultStatus#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(dir)
+    start_supervised!({Registry, keys: :duplicate, name: pubsub_registry})
+    start_supervised!({Registry, keys: :duplicate, name: mailbox_registry})
+    start_supervised!({Registry, keys: :duplicate, name: fault_registry})
+
+    writer =
+      start_supervised!(
+        {LedgerWriter, db_path: db_path, core_node_id: "core_a", secret: "ha-secret", name: nil}
+      )
+
+    io_fault_status =
+      start_supervised!(
+        {IoFaultStatus,
+         log_path: log_path,
+         hmac_secret: "ha-secret",
+         default_room_id: "placeholder",
+         writer: writer,
+         registry_name: fault_registry,
+         name: io_fault_status_name}
+      )
+
+    receipt_store =
+      start_supervised!(
+        {ReceiptStore,
+         path: Path.join(dir, "receipts.json"), secret: "ha-secret", name: receipt_store_name}
+      )
+
+    command_store =
+      start_supervised!(
+        {CommandExecutionStore,
+         path: Path.join(dir, "command_store.json"), name: command_store_name}
+      )
+
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    %{
+      db_path: db_path,
+      pubsub_registry: pubsub_registry,
+      mailbox_registry: mailbox_registry,
+      io_fault_status: io_fault_status,
+      receipt_store: receipt_store,
+      command_store: command_store,
+      entity_ids: %{
+        co2: "sensor.placeholder_co2",
+        humidity: "sensor.placeholder_humidity",
+        temperature: "sensor.placeholder_temperature",
+        fan: "switch.placeholder_fan"
+      }
+    }
+  end
+
+  test "starts degraded, retries, recovers, publishes a snapshot, and dispatches fan commands", %{
+    db_path: db_path,
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    assert {:ok, _} = PubSub.subscribe("io_state:room:placeholder", registry_name: pubsub_registry)
+
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       command_observer: self(),
+       transport: FlakyTransport,
+       name: Module.concat(__MODULE__, "Client#{System.unique_integer([:positive])}")}
+    )
+
+    assert_receive {:core_pubsub, "io_state:room:placeholder", snapshot}, 2_500
+    assert snapshot.snapshot_id
+    assert snapshot.co2_ppm == 1200
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", signed_command("cmd-1", "actuator:fan", "on"),
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 5,
+               ledger_event_hash: String.duplicate("a", 64),
+               decision_event_id: "event-4"
+             )
+
+    assert_receive {:transport_command, %{"service" => "turn_on", "entity_id" => "switch.placeholder_fan"}, %{accepted: true}}, 1_500
+
+    assert {:ok, rows} =
+             LedgerSQLite.query_json(db_path, "SELECT event_type FROM ledger_events ORDER BY sequence ASC;")
+
+    event_types = Enum.map(rows, & &1["event_type"])
+    assert "connection_status_observed" in event_types
+  end
+
+  test "wrong-class entities enter degraded mode and disable physical fan control", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       command_observer: self(),
+       transport: WrongClassTransport,
+       name: Module.concat(__MODULE__, "WrongClassClient#{System.unique_integer([:positive])}")}
+    )
+
+    Process.sleep(100)
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", signed_command("cmd-2", "actuator:fan", "off"),
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 6,
+               ledger_event_hash: String.duplicate("b", 64),
+               decision_event_id: "event-4"
+             )
+
+    refute_receive {:transport_command, _request}, 300
+
+    assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-2")
+  end
+
+  test "non-fan actuator commands stay noop stubs", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       command_observer: self(),
+       transport: FlakyTransport,
+       name: Module.concat(__MODULE__, "StubClient#{System.unique_integer([:positive])}")}
+    )
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", signed_command("cmd-3", "actuator:light", "on"),
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 7,
+               ledger_event_hash: String.duplicate("c", 64),
+               decision_event_id: "event-4"
+             )
+
+    refute_receive {:transport_command, _request}, 300
+  end
+
+  test "rejects duplicate idempotency keys after the first accepted execution", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       command_observer: self(),
+       transport: FlakyTransport,
+       name: Module.concat(__MODULE__, "ReplayClient#{System.unique_integer([:positive])}")}
+    )
+
+    Process.sleep(1_200)
+
+    command = signed_command("cmd-dup", "actuator:fan", "on")
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", command,
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 8,
+               ledger_event_hash: String.duplicate("d", 64),
+               decision_event_id: "event-4"
+             )
+
+    assert_receive {:transport_command, _request, %{accepted: true}}, 2_000
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", command,
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 9,
+               ledger_event_hash: String.duplicate("e", 64),
+               decision_event_id: "event-4"
+             )
+
+    refute_receive {:transport_command, _request, %{accepted: true}}, 500
+    assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-dup")
+  end
+
+  test "transport failures keep the receipt phase at publish_attempted", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       command_observer: self(),
+       transport: FailingCommandTransport,
+       name: Module.concat(__MODULE__, "FailingClient#{System.unique_integer([:positive])}")}
+    )
+
+    Process.sleep(100)
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", signed_command("cmd-fail", "actuator:fan", "on"),
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 10,
+               ledger_event_hash: String.duplicate("f", 64),
+               decision_event_id: "event-4"
+             )
+
+    refute_receive {:transport_command, _request, _result}, 300
+    assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-fail")
+  end
+
+  test "disconnected clients keep the receipt phase at publish_attempted", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       command_observer: self(),
+       transport: DownTransport,
+       name: Module.concat(__MODULE__, "DownClient#{System.unique_integer([:positive])}")}
+    )
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", signed_command("cmd-down", "actuator:fan", "on"),
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 11,
+               ledger_event_hash: String.duplicate("0", 64),
+               decision_event_id: "event-4"
+             )
+
+    refute_receive {:transport_command, _request, _result}, 300
+    assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-down")
+  end
+
+  defp signed_command(command_id, target, requested_state) do
+    CommandEnvelope.new!(%{
+      command_id: command_id,
+      idempotency_key: "idem-#{command_id}",
+      effect_key: "effect-#{command_id}",
+      subject: "core_rule_stub",
+      target: target,
+      action: "command_actuator",
+      scope: "room:placeholder",
+      requested_state: requested_state,
+      snapshot_id: "snap-1",
+      snapshot_seq: 1,
+      decision_event_id: "event-4",
+      reasoner_outcome_event_id: "event-2",
+      capability_event_id: "event-3",
+      policy_decision_id: "policy-1",
+      issued_at: "2026-05-10T12:00:02.000Z",
+      expires_at: "2099-05-10T12:00:07.000Z",
+      payload_hash: String.duplicate("c", 64),
+      signature_version: "hmac-sha256-v1",
+      signature: ""
+    })
+    |> then(fn unsigned ->
+      %{unsigned | signature: Contracts.sign_hmac(unsigned, "ha-secret", "eigenforge:v1:command_envelope")}
+    end)
+  end
+
+  defp latest_receipt_phase(receipt_store, command_id) do
+    assert {:ok, entries} = ReceiptStore.entries_for_command(receipt_store, command_id)
+
+    entries
+    |> Enum.max_by(fn entry ->
+      get_in(entry, ["phase_metadata", "published_at"]) ||
+        get_in(entry, ["phase_metadata", "receipt_stored_at"])
+    end)
+    |> Map.fetch!("delivery_phase")
+  end
+end

@@ -95,7 +95,7 @@ defmodule Eigenforge.Core.LedgerWriter do
     with {:ok, db_path} <- fetch_option(opts, :db_path),
          {:ok, core_node_id} <- fetch_option(opts, :core_node_id),
          {:ok, secret} <- fetch_option(opts, :secret),
-         :ok <- LedgerTooling.ensure_genesis(db_path, core_node_id, secret),
+         :ok <- prepare_ledger(db_path, core_node_id, secret),
          :ok <- LedgerProjections.rebuild(db_path) do
       {:ok, %{db_path: db_path, core_node_id: core_node_id, secret: secret}}
     else
@@ -193,6 +193,18 @@ defmodule Eigenforge.Core.LedgerWriter do
     case Keyword.fetch(opts, key) do
       {:ok, value} when is_binary(value) and value != "" -> {:ok, value}
       _ -> {:error, {:missing_option, key}}
+    end
+  end
+
+  defp prepare_ledger(db_path, core_node_id, secret) do
+    with :ok <- LedgerSQLite.init(db_path, core_node_id),
+         {:ok, [%{"count(*)" => count}]} <-
+           LedgerSQLite.query_json(db_path, "SELECT count(*) FROM ledger_events;") do
+      if count == 0 do
+        LedgerTooling.ensure_genesis(db_path, core_node_id, secret)
+      else
+        :ok
+      end
     end
   end
 

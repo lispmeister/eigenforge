@@ -2,7 +2,7 @@
 id: eig-glzz
 status: open
 deps: [eig-bqzy, eig-gu9r]
-links: []
+links: [eig-xs66, eig-l5tk, eig-5mvh]
 created: 2026-05-09T14:11:40Z
 type: feature
 priority: 2

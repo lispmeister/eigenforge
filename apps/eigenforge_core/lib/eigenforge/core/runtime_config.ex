@@ -21,6 +21,7 @@ defmodule Eigenforge.Core.RuntimeConfig do
           after_action_timeout_ms: pos_integer(),
           ha_reconnect_max_ms: pos_integer(),
           io_fault_status_log: String.t(),
+          io_command_store_path: String.t(),
           home_assistant: map() | nil
         }
 
@@ -36,6 +37,7 @@ defmodule Eigenforge.Core.RuntimeConfig do
     :after_action_timeout_ms,
     :ha_reconnect_max_ms,
     :io_fault_status_log,
+    :io_command_store_path,
     :home_assistant
   ]
 
@@ -46,6 +48,7 @@ defmodule Eigenforge.Core.RuntimeConfig do
     "EIGENFORGE_AFTER_ACTION_TIMEOUT_MS" => "3000",
     "EIGENFORGE_HA_RECONNECT_MAX_MS" => "180000",
     "EIGENFORGE_IO_FAULT_STATUS_LOG" => "log/io_fault_status.log",
+    "EIGENFORGE_IO_COMMAND_STORE_PATH" => "log/io_command_store.json",
     "EIGENFORGE_DEVICE_INVENTORY_PATH" => "config/devices.json",
     "EIGENFORGE_DEVICE_INVENTORY_SIG_PATH" => "config/devices.json.sig",
     "EIGENFORGE_CAPABILITY_GRANTS_DIR" => "config/capabilities",
@@ -56,7 +59,14 @@ defmodule Eigenforge.Core.RuntimeConfig do
   Loads runtime config from `System.get_env/0`.
   """
   @spec load() :: {:ok, t()} | {:error, [term()]}
-  def load, do: load(System.get_env())
+  def load do
+    env =
+      Application.get_env(:eigenforge_core, :runtime_env, %{})
+      |> stringify_env()
+      |> Map.merge(System.get_env())
+
+    load(env)
+  end
 
   @doc """
   Loads and validates runtime config from a string-keyed env map.
@@ -122,6 +132,7 @@ defmodule Eigenforge.Core.RuntimeConfig do
          parse_positive_integer!(env["EIGENFORGE_AFTER_ACTION_TIMEOUT_MS"]),
        ha_reconnect_max_ms: parse_positive_integer!(env["EIGENFORGE_HA_RECONNECT_MAX_MS"]),
        io_fault_status_log: env["EIGENFORGE_IO_FAULT_STATUS_LOG"],
+       io_command_store_path: env["EIGENFORGE_IO_COMMAND_STORE_PATH"],
        home_assistant: %{
          url: env["HOME_ASSISTANT_URL"],
          token: env["HOME_ASSISTANT_TOKEN"],
@@ -150,6 +161,7 @@ defmodule Eigenforge.Core.RuntimeConfig do
          parse_positive_integer!(env["EIGENFORGE_AFTER_ACTION_TIMEOUT_MS"]),
        ha_reconnect_max_ms: parse_positive_integer!(env["EIGENFORGE_HA_RECONNECT_MAX_MS"]),
        io_fault_status_log: env["EIGENFORGE_IO_FAULT_STATUS_LOG"],
+       io_command_store_path: env["EIGENFORGE_IO_COMMAND_STORE_PATH"],
        home_assistant: nil
      }}
   end

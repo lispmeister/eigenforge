@@ -2,7 +2,7 @@
 id: eig-l5tk
 status: open
 deps: [eig-c2fz, eig-5b1u]
-links: []
+links: [eig-xs66, eig-glzz, eig-5mvh]
 created: 2026-05-09T14:10:46Z
 type: feature
 priority: 2

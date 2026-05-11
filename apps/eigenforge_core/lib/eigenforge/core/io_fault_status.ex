@@ -29,6 +29,8 @@ defmodule Eigenforge.Core.IoFaultStatus do
           required(:fault_type) => String.t(),
           optional(:room_id) => String.t(),
           optional(:message) => String.t() | nil,
+          optional(:source_received_seq) => integer(),
+          optional(:source_received_monotonic_ms) => integer(),
           optional(:metadata) => map(),
           optional(:ooda_relevant) => boolean(),
           optional(:audit) => boolean()
@@ -253,11 +255,17 @@ defmodule Eigenforge.Core.IoFaultStatus do
   defp event_metadata(attrs) do
     metadata = Map.get(attrs, :metadata, %{})
 
-    case Map.get(attrs, :correlation_id) do
-      nil -> metadata
-      correlation_id -> Map.put(metadata, "correlation_id", correlation_id)
-    end
+    metadata
+    |> maybe_put_metadata("correlation_id", Map.get(attrs, :correlation_id))
+    |> maybe_put_metadata("source_received_seq", Map.get(attrs, :source_received_seq))
+    |> maybe_put_metadata(
+      "source_received_monotonic_ms",
+      Map.get(attrs, :source_received_monotonic_ms)
+    )
   end
+
+  defp maybe_put_metadata(metadata, _key, nil), do: metadata
+  defp maybe_put_metadata(metadata, key, value), do: Map.put(metadata, key, value)
 
   defp now do
     DateTime.utc_now()

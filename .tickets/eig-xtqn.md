@@ -2,7 +2,7 @@
 id: eig-xtqn
 status: open
 deps: [eig-cj5v]
-links: []
+links: [eig-l5tk, eig-runa, eig-zp2l]
 created: 2026-05-09T14:11:31Z
 type: feature
 priority: 2

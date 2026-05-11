@@ -1,17 +1,15 @@
 defmodule Eigenforge.Core.OodaPipelineTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Eigenforge.Contracts
+  alias Eigenforge.Core.IoFaultStatus
   alias Eigenforge.Core.LedgerSQLite
   alias Eigenforge.Core.LedgerWriter
   alias Eigenforge.Core.PubSub
   alias Eigenforge.Core.SnapshotSubscriber
   alias Eigenforge.Mailbox.CommandPublisher
+  alias Eigenforge.Mailbox.ReceiptStore
   alias Eigenforge.Trace
-
-  defmodule PendingAfterActionObserver do
-    def observe(_command), do: {:ok, nil}
-  end
 
   setup do
     db_path =
@@ -20,8 +18,11 @@ defmodule Eigenforge.Core.OodaPipelineTest do
         "eigenforge-ooda-#{System.unique_integer([:positive])}.sqlite3"
       )
 
+    cleanup_artifacts(db_path)
+
     pubsub_registry = Module.concat(__MODULE__, "CoreRegistry#{System.unique_integer([:positive])}")
     mailbox_registry = Module.concat(__MODULE__, "MailboxRegistry#{System.unique_integer([:positive])}")
+    receipt_store_name = Module.concat(__MODULE__, "ReceiptStore#{System.unique_integer([:positive])}")
     subscriber_name = Module.concat(__MODULE__, "Subscriber#{System.unique_integer([:positive])}")
 
     start_supervised!({Registry, keys: :duplicate, name: pubsub_registry})
@@ -32,27 +33,30 @@ defmodule Eigenforge.Core.OodaPipelineTest do
         {LedgerWriter, db_path: db_path, core_node_id: "core_a", secret: "pipeline-secret", name: nil}
       )
 
+    receipt_store =
+      start_supervised!(
+        {ReceiptStore,
+         path: db_path <> ".receipts.json", secret: "pipeline-secret", name: receipt_store_name}
+      )
+
     start_supervised!(
       {SnapshotSubscriber,
        room_id: "placeholder",
        pubsub_registry: pubsub_registry,
        mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
        writer: writer,
        db_path: db_path,
        secret: "pipeline-secret",
        name: subscriber_name}
     )
 
-    on_exit(fn ->
-      File.rm(db_path)
-      File.rm("#{db_path}-wal")
-      File.rm("#{db_path}-shm")
-    end)
+    on_exit(fn -> cleanup_artifacts(db_path) end)
 
-    %{db_path: db_path, pubsub_registry: pubsub_registry, mailbox_registry: mailbox_registry}
+    %{db_path: db_path, pubsub_registry: pubsub_registry, mailbox_registry: mailbox_registry, receipt_store: receipt_store}
   end
 
-  test "published snapshot flows through supervised pipeline and publishes command after ledger append", %{
+  test "published snapshot commits a command first and records after-action only after a later confirming observation", %{
     db_path: db_path,
     pubsub_registry: pubsub_registry,
     mailbox_registry: mailbox_registry
@@ -69,10 +73,10 @@ defmodule Eigenforge.Core.OodaPipelineTest do
       "temperature_millicelsius" => 22_000,
       "fan_state" => "off",
       "source_entity_ids" => %{},
-      "source_observation_ids" => %{},
+      "source_observation_ids" => %{"fan" => "fan-obs-1"},
       "source_observed_at" => %{},
-      "source_received_seq" => %{},
-      "source_received_monotonic_ms" => %{},
+      "source_received_seq" => %{"fan" => 1},
+      "source_received_monotonic_ms" => %{"fan" => 1},
       "source_status" => %{},
       "normalized_at" => "2026-05-08T12:00:00.000Z",
       "freshness" => "fresh"
@@ -80,8 +84,9 @@ defmodule Eigenforge.Core.OodaPipelineTest do
 
     assert :ok = PubSub.publish("io_state:room:placeholder", fixture, registry_name: pubsub_registry)
 
-    assert_receive {:mailbox_command, "commands:io", published_command}, 1_000
-    assert is_binary(published_command["command_id"])
+    assert_receive {:mailbox_command, "commands:io", delivery}, 1_000
+    assert is_binary(delivery["command"]["command_id"])
+    assert is_binary(delivery["receipt"]["receipt_id"])
 
     assert {:ok, rows} =
              LedgerSQLite.query_json(
@@ -96,12 +101,11 @@ defmodule Eigenforge.Core.OodaPipelineTest do
              "reasoner_outcome_recorded",
              "capability_check_recorded",
              "policy_decision_recorded",
-             "command_envelope_issued",
-             "after_action_recorded"
+             "command_envelope_issued"
            ]
 
     assert {:ok, trace} = Trace.run(fixture, "inline-fixture")
-    assert Enum.map(trace["ledger_events"], & &1["event_type"]) == Enum.drop(event_types, 1)
+    assert Enum.take(Enum.map(trace["ledger_events"], & &1["event_type"]), 4) == Enum.drop(event_types, 1)
 
     by_type = Map.new(rows, fn row -> {row["event_type"], row} end)
     command_payload = by_type["command_envelope_issued"]["payload"] |> Contracts.decode_json!()
@@ -109,6 +113,33 @@ defmodule Eigenforge.Core.OodaPipelineTest do
     assert command_payload["decision_event_id"] == by_type["command_envelope_issued"]["event_id"]
     assert command_payload["reasoner_outcome_event_id"] == by_type["reasoner_outcome_recorded"]["event_id"]
     assert command_payload["capability_event_id"] == by_type["capability_check_recorded"]["event_id"]
+
+    follow_up =
+      Map.merge(fixture, %{
+        "snapshot_id" => "snap-2",
+        "snapshot_seq" => 2,
+        "fan_state" => "on",
+        "source_observation_ids" => %{"fan" => "fan-obs-2"},
+        "source_received_seq" => %{"fan" => 2},
+        "source_received_monotonic_ms" => %{"fan" => 2},
+        "normalized_at" => "2026-05-08T12:00:01.000Z"
+      })
+
+    assert :ok = PubSub.publish("io_state:room:placeholder", follow_up, registry_name: pubsub_registry)
+
+    final_event_types =
+      wait_for_event_types(db_path, fn types ->
+        Enum.take(types, 6) == [
+          "ledger_genesis",
+          "reasoner_outcome_recorded",
+          "capability_check_recorded",
+          "policy_decision_recorded",
+          "command_envelope_issued",
+          "after_action_recorded"
+        ]
+      end)
+
+    assert "after_action_recorded" in final_event_types
   end
 
   test "duplicate snapshot ids are ignored after the first processed delivery", %{
@@ -125,10 +156,10 @@ defmodule Eigenforge.Core.OodaPipelineTest do
       "temperature_millicelsius" => 22_000,
       "fan_state" => "off",
       "source_entity_ids" => %{},
-      "source_observation_ids" => %{},
+      "source_observation_ids" => %{"fan" => "fan-obs-1"},
       "source_observed_at" => %{},
-      "source_received_seq" => %{},
-      "source_received_monotonic_ms" => %{},
+      "source_received_seq" => %{"fan" => 1},
+      "source_received_monotonic_ms" => %{"fan" => 1},
       "source_status" => %{},
       "normalized_at" => "2026-05-08T12:00:00.000Z",
       "freshness" => "fresh"
@@ -144,8 +175,7 @@ defmodule Eigenforge.Core.OodaPipelineTest do
              "reasoner_outcome_recorded",
              "capability_check_recorded",
              "policy_decision_recorded",
-             "command_envelope_issued",
-             "after_action_recorded"
+             "command_envelope_issued"
            ]
   end
 
@@ -156,8 +186,11 @@ defmodule Eigenforge.Core.OodaPipelineTest do
         "eigenforge-ooda-inflight-#{System.unique_integer([:positive])}.sqlite3"
       )
 
+    cleanup_artifacts(db_path)
+
     pubsub_registry = Module.concat(__MODULE__, "InflightCoreRegistry#{System.unique_integer([:positive])}")
     mailbox_registry = Module.concat(__MODULE__, "InflightMailboxRegistry#{System.unique_integer([:positive])}")
+    receipt_store_name = Module.concat(__MODULE__, "InflightReceiptStore#{System.unique_integer([:positive])}")
     writer_name = Module.concat(__MODULE__, "InflightWriter#{System.unique_integer([:positive])}")
     subscriber_name = Module.concat(__MODULE__, "PendingSubscriber#{System.unique_integer([:positive])}")
 
@@ -170,23 +203,25 @@ defmodule Eigenforge.Core.OodaPipelineTest do
          db_path: db_path, core_node_id: "core_a", secret: "pipeline-secret", name: writer_name}
       )
 
+    receipt_store =
+      start_supervised!(
+        {ReceiptStore,
+         path: db_path <> ".receipts.json", secret: "pipeline-secret", name: receipt_store_name}
+      )
+
     start_supervised!(
       {SnapshotSubscriber,
        room_id: "placeholder",
        pubsub_registry: pubsub_registry,
        mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
        writer: writer,
        db_path: db_path,
        secret: "pipeline-secret",
-       after_action_observer: PendingAfterActionObserver,
        name: subscriber_name}
     )
 
-    on_exit(fn ->
-      File.rm(db_path)
-      File.rm("#{db_path}-wal")
-      File.rm("#{db_path}-shm")
-    end)
+    on_exit(fn -> cleanup_artifacts(db_path) end)
 
     assert {:ok, _} = CommandPublisher.subscribe("commands:io", registry_name: mailbox_registry)
 
@@ -212,40 +247,362 @@ defmodule Eigenforge.Core.OodaPipelineTest do
     snapshot_two = %{snapshot_one | "snapshot_id" => "snap-effect-2", "snapshot_seq" => 2}
 
     assert :ok = PubSub.publish("io_state:room:placeholder", snapshot_one, registry_name: pubsub_registry)
-    assert_receive {:mailbox_command, "commands:io", _first_command}, 1_000
+    assert_receive {:mailbox_command, "commands:io", _first_delivery}, 1_000
 
     assert :ok = PubSub.publish("io_state:room:placeholder", snapshot_two, registry_name: pubsub_registry)
-    refute_receive {:mailbox_command, "commands:io", _second_command}, 500
+    refute_receive {:mailbox_command, "commands:io", _second_delivery}, 500
   end
 
-  defp wait_for_event_types(db_path, attempts \\ 20)
+  test "pending commands record a terminal timed_out after-action when no confirming observation arrives" do
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "eigenforge-ooda-timeout-#{System.unique_integer([:positive])}.sqlite3"
+      )
 
-  defp wait_for_event_types(db_path, attempts) when attempts > 0 do
+    cleanup_artifacts(db_path)
+
+    pubsub_registry = Module.concat(__MODULE__, "TimeoutCoreRegistry#{System.unique_integer([:positive])}")
+    mailbox_registry = Module.concat(__MODULE__, "TimeoutMailboxRegistry#{System.unique_integer([:positive])}")
+    receipt_store_name = Module.concat(__MODULE__, "TimeoutReceiptStore#{System.unique_integer([:positive])}")
+    writer_name = Module.concat(__MODULE__, "TimeoutWriter#{System.unique_integer([:positive])}")
+    subscriber_name = Module.concat(__MODULE__, "TimeoutSubscriber#{System.unique_integer([:positive])}")
+
+    start_supervised!({Registry, keys: :duplicate, name: pubsub_registry})
+    start_supervised!({Registry, keys: :duplicate, name: mailbox_registry})
+
+    writer =
+      start_supervised!(
+        {LedgerWriter,
+         db_path: db_path, core_node_id: "core_a", secret: "pipeline-secret", name: writer_name}
+      )
+
+    receipt_store =
+      start_supervised!(
+        {ReceiptStore,
+         path: db_path <> ".receipts.json", secret: "pipeline-secret", name: receipt_store_name}
+      )
+
+    start_supervised!(
+      {SnapshotSubscriber,
+       room_id: "placeholder",
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       writer: writer,
+       db_path: db_path,
+       secret: "pipeline-secret",
+       after_action_timeout_ms: 100,
+       name: subscriber_name}
+    )
+
+    on_exit(fn -> cleanup_artifacts(db_path) end)
+
+    fixture = %{
+      "snapshot_id" => "snap-timeout-1",
+      "snapshot_seq" => 1,
+      "snapshot_hash" => String.duplicate("a", 64),
+      "room_id" => "placeholder",
+      "co2_ppm" => 1200,
+      "humidity_basis_points" => 4500,
+      "temperature_millicelsius" => 22_000,
+      "fan_state" => "off",
+      "source_entity_ids" => %{},
+      "source_observation_ids" => %{"fan" => "fan-obs-1"},
+      "source_observed_at" => %{},
+      "source_received_seq" => %{"fan" => 1},
+      "source_received_monotonic_ms" => %{"fan" => 1},
+      "source_status" => %{},
+      "normalized_at" => "2026-05-08T12:00:00.000Z",
+      "freshness" => "fresh"
+    }
+
+    assert :ok = PubSub.publish("io_state:room:placeholder", fixture, registry_name: pubsub_registry)
+
+    timeout_event_types =
+      wait_for_event_types(db_path, fn types ->
+        Enum.take(types, 6) == [
+          "ledger_genesis",
+          "reasoner_outcome_recorded",
+          "capability_check_recorded",
+          "policy_decision_recorded",
+          "command_envelope_issued",
+          "after_action_recorded"
+        ]
+      end)
+
+    assert "after_action_recorded" in timeout_event_types
+
+    payload_json = wait_for_after_action_payload(db_path)
+    assert %{"status" => "timed_out"} = Contracts.decode_json!(payload_json)
+  end
+
+  test "restart recovery records timed_out for an io_accepted command whose after-action deadline elapsed while down" do
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "eigenforge-ooda-recovery-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    cleanup_artifacts(db_path)
+
+    pubsub_registry = Module.concat(__MODULE__, "RecoveryCoreRegistry#{System.unique_integer([:positive])}")
+    mailbox_registry = Module.concat(__MODULE__, "RecoveryMailboxRegistry#{System.unique_integer([:positive])}")
+    receipt_store_name = Module.concat(__MODULE__, "RecoveryReceiptStore#{System.unique_integer([:positive])}")
+    writer_name = Module.concat(__MODULE__, "RecoveryWriter#{System.unique_integer([:positive])}")
+    subscriber_name = Module.concat(__MODULE__, "RecoverySubscriber#{System.unique_integer([:positive])}")
+
+    start_supervised!({Registry, keys: :duplicate, name: pubsub_registry})
+    start_supervised!({Registry, keys: :duplicate, name: mailbox_registry})
+
+    writer =
+      start_supervised!(
+        {LedgerWriter,
+         db_path: db_path, core_node_id: "core_a", secret: "pipeline-secret", name: writer_name}
+      )
+
+    receipt_store =
+      start_supervised!(
+        {ReceiptStore,
+         path: db_path <> ".receipts.json", secret: "pipeline-secret", name: receipt_store_name}
+      )
+
+    subscriber =
+      start_supervised!(
+        {SnapshotSubscriber,
+         room_id: "placeholder",
+         pubsub_registry: pubsub_registry,
+         mailbox_registry: mailbox_registry,
+         mailbox_receipt_store: receipt_store,
+         writer: writer,
+         db_path: db_path,
+         secret: "pipeline-secret",
+         after_action_timeout_ms: 100,
+         name: subscriber_name}
+      )
+
+    on_exit(fn -> cleanup_artifacts(db_path) end)
+
+    assert {:ok, _} = CommandPublisher.subscribe("commands:io", registry_name: mailbox_registry)
+
+    fixture = %{
+      "snapshot_id" => "snap-recovery-1",
+      "snapshot_seq" => 1,
+      "snapshot_hash" => String.duplicate("f", 64),
+      "room_id" => "placeholder",
+      "co2_ppm" => 1200,
+      "humidity_basis_points" => 4500,
+      "temperature_millicelsius" => 22_000,
+      "fan_state" => "off",
+      "source_entity_ids" => %{},
+      "source_observation_ids" => %{"fan" => "fan-obs-1"},
+      "source_observed_at" => %{},
+      "source_received_seq" => %{"fan" => 1},
+      "source_received_monotonic_ms" => %{"fan" => 1},
+      "source_status" => %{},
+      "normalized_at" => "2026-05-08T12:00:00.000Z",
+      "freshness" => "fresh"
+    }
+
+    assert :ok = PubSub.publish("io_state:room:placeholder", fixture, registry_name: pubsub_registry)
+    assert_receive {:mailbox_command, "commands:io", delivery}, 1_000
+
+    assert :ok =
+             ReceiptStore.mark_phase(receipt_store, delivery["receipt"]["receipt_id"], "io_accepted", %{
+               accepted_at: "2026-05-08T12:00:00.000Z"
+             })
+
+    Process.exit(subscriber, :normal)
+    Process.sleep(50)
+
+    restarted_name = Module.concat(__MODULE__, "RecoverySubscriberRestart#{System.unique_integer([:positive])}")
+
+    start_supervised!(
+      {SnapshotSubscriber,
+       room_id: "placeholder",
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       writer: writer,
+       db_path: db_path,
+       secret: "pipeline-secret",
+       after_action_timeout_ms: 100,
+       name: restarted_name}
+    )
+
+    payload_json = wait_for_after_action_payload(db_path)
+    payload = Contracts.decode_json!(payload_json)
+    assert payload["command_id"] == delivery["command"]["command_id"]
+    assert payload["status"] == "timed_out"
+  end
+
+  test "live io faults with newer ordering metadata record terminal adapter_failed after-actions" do
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "eigenforge-ooda-fault-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    cleanup_artifacts(db_path)
+
+    pubsub_registry = Module.concat(__MODULE__, "FaultCoreRegistry#{System.unique_integer([:positive])}")
+    mailbox_registry = Module.concat(__MODULE__, "FaultMailboxRegistry#{System.unique_integer([:positive])}")
+    fault_registry = Module.concat(__MODULE__, "FaultStatusRegistry#{System.unique_integer([:positive])}")
+    receipt_store_name = Module.concat(__MODULE__, "FaultReceiptStore#{System.unique_integer([:positive])}")
+    writer_name = Module.concat(__MODULE__, "FaultWriter#{System.unique_integer([:positive])}")
+    fault_status_name = Module.concat(__MODULE__, "FaultStatus#{System.unique_integer([:positive])}")
+    subscriber_name = Module.concat(__MODULE__, "FaultSubscriber#{System.unique_integer([:positive])}")
+
+    start_supervised!({Registry, keys: :duplicate, name: pubsub_registry})
+    start_supervised!({Registry, keys: :duplicate, name: mailbox_registry})
+    start_supervised!({Registry, keys: :duplicate, name: fault_registry})
+
+    writer =
+      start_supervised!(
+        {LedgerWriter,
+         db_path: db_path, core_node_id: "core_a", secret: "pipeline-secret", name: writer_name}
+      )
+
+    receipt_store =
+      start_supervised!(
+        {ReceiptStore,
+         path: db_path <> ".receipts.json", secret: "pipeline-secret", name: receipt_store_name}
+      )
+
+    fault_status =
+      start_supervised!(
+        {IoFaultStatus,
+         log_path: db_path <> ".io_fault.log",
+         hmac_secret: "pipeline-secret",
+         default_room_id: "placeholder",
+         writer: writer,
+         registry_name: fault_registry,
+         name: fault_status_name}
+      )
+
+    start_supervised!(
+      {SnapshotSubscriber,
+       room_id: "placeholder",
+       pubsub_registry: pubsub_registry,
+       io_fault_status_registry: fault_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       writer: writer,
+       db_path: db_path,
+       secret: "pipeline-secret",
+       after_action_timeout_ms: 1_000,
+       name: subscriber_name}
+    )
+
+    on_exit(fn -> cleanup_artifacts(db_path) end)
+
+    assert {:ok, _} = CommandPublisher.subscribe("commands:io", registry_name: mailbox_registry)
+
+    fixture = %{
+      "snapshot_id" => "snap-fault-1",
+      "snapshot_seq" => 1,
+      "snapshot_hash" => String.duplicate("f", 64),
+      "room_id" => "placeholder",
+      "co2_ppm" => 1200,
+      "humidity_basis_points" => 4500,
+      "temperature_millicelsius" => 22_000,
+      "fan_state" => "off",
+      "source_entity_ids" => %{},
+      "source_observation_ids" => %{"fan" => "fan-obs-1"},
+      "source_observed_at" => %{},
+      "source_received_seq" => %{"fan" => 1},
+      "source_received_monotonic_ms" => %{"fan" => 1},
+      "source_status" => %{},
+      "normalized_at" => "2026-05-08T12:00:00.000Z",
+      "freshness" => "fresh"
+    }
+
+    assert :ok = PubSub.publish("io_state:room:placeholder", fixture, registry_name: pubsub_registry)
+    assert_receive {:mailbox_command, "commands:io", delivery}, 1_000
+
+    assert {:ok, _event} =
+             IoFaultStatus.record(fault_status, %{
+               source: "home_assistant",
+               room_id: "placeholder",
+               fault_type: "adapter_execution_failed",
+               message: "service unavailable",
+               audit: true,
+               source_received_seq: 2,
+               source_received_monotonic_ms: 2,
+               metadata: %{
+                 "command_id" => delivery["command"]["command_id"],
+                 "target" => delivery["command"]["target"]
+               }
+             })
+
+    payload_json = wait_for_after_action_payload(db_path)
+    payload = Contracts.decode_json!(payload_json)
+    assert payload["command_id"] == delivery["command"]["command_id"]
+    assert payload["status"] == "adapter_failed"
+  end
+
+  defp wait_for_event_types(db_path, predicate \\ nil, attempts \\ 100)
+
+  defp wait_for_event_types(db_path, predicate, attempts) when attempts > 0 do
     case LedgerSQLite.query_json(db_path, "SELECT event_type FROM ledger_events ORDER BY sequence ASC;") do
       {:ok, rows} ->
         event_types = Enum.map(rows, & &1["event_type"])
 
-        if event_types == [
-             "ledger_genesis",
-             "reasoner_outcome_recorded",
-             "capability_check_recorded",
-             "policy_decision_recorded",
-             "command_envelope_issued",
-             "after_action_recorded"
-           ] do
+        expected? =
+          if is_function(predicate, 1) do
+            predicate.(event_types)
+          else
+            event_types == [
+              "ledger_genesis",
+              "reasoner_outcome_recorded",
+              "capability_check_recorded",
+              "policy_decision_recorded",
+              "command_envelope_issued"
+            ]
+          end
+
+        if expected? do
           event_types
         else
           Process.sleep(50)
-          wait_for_event_types(db_path, attempts - 1)
+          wait_for_event_types(db_path, predicate, attempts - 1)
         end
 
       {:error, _reason} ->
         Process.sleep(50)
-        wait_for_event_types(db_path, attempts - 1)
+        wait_for_event_types(db_path, predicate, attempts - 1)
     end
   end
 
-  defp wait_for_event_types(_db_path, 0) do
+  defp wait_for_event_types(_db_path, _predicate, 0) do
     flunk("timed out waiting for expected duplicate-suppressed ledger chain")
+  end
+
+  defp wait_for_after_action_payload(db_path, attempts \\ 100)
+
+  defp wait_for_after_action_payload(db_path, attempts) when attempts > 0 do
+    case LedgerSQLite.query_json(
+           db_path,
+           "SELECT payload FROM ledger_events WHERE event_type = 'after_action_recorded' ORDER BY sequence DESC LIMIT 1;"
+         ) do
+      {:ok, [%{"payload" => payload_json}]} ->
+        payload_json
+
+      _ ->
+        Process.sleep(50)
+        wait_for_after_action_payload(db_path, attempts - 1)
+    end
+  end
+
+  defp wait_for_after_action_payload(_db_path, 0) do
+    flunk("timed out waiting for durable after_action payload")
+  end
+
+  defp cleanup_artifacts(db_path) do
+    File.rm(db_path)
+    File.rm("#{db_path}-wal")
+    File.rm("#{db_path}-shm")
+    File.rm("#{db_path}.receipts.json")
+    File.rm("#{db_path}.receipts.json.manifest.json")
   end
 end

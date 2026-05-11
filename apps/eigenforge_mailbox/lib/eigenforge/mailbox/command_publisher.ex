@@ -1,24 +1,66 @@
 defmodule Eigenforge.Mailbox.CommandPublisher do
   @moduledoc """
-  Minimal V1 mailbox publisher for command envelopes.
+  V1 mailbox publisher for signed command envelope deliveries.
   """
 
-  @default_registry Eigenforge.Mailbox.Registry
+  alias Eigenforge.Mailbox.ReceiptStore
 
-  @spec publish(String.t(), map() | struct(), keyword()) :: :ok
+  @default_registry Eigenforge.Mailbox.Registry
+  @default_store Eigenforge.Mailbox.ReceiptStore
+
+  @spec publish(String.t(), map() | struct(), keyword()) :: :ok | {:error, term()}
   def publish(topic, command, opts \\ []) when is_binary(topic) do
     registry = Keyword.get(opts, :registry_name, @default_registry)
+    store = Keyword.get(opts, :receipt_store, @default_store)
+    command = wire_map(command)
 
-    Registry.dispatch(registry, topic, fn entries ->
-      Enum.each(entries, fn {pid, _value} -> send(pid, {:mailbox_command, topic, command}) end)
-    end)
+    with {:ok, receipt} <-
+           ReceiptStore.store_receipt(store, topic, command,
+             ledger_sequence: Keyword.fetch!(opts, :ledger_sequence),
+             ledger_event_hash: Keyword.fetch!(opts, :ledger_event_hash),
+             decision_event_id: Keyword.fetch!(opts, :decision_event_id)
+           ),
+         :ok <- ReceiptStore.mark_phase(store, receipt.receipt_id, "publish_attempted", %{
+           published_at: receipt.delivered_at
+         }) do
+      payload = %{
+        "command" => command,
+        "receipt" => wire_map(receipt)
+      }
 
-    :ok
+      Registry.dispatch(registry, topic, fn entries ->
+        Enum.each(entries, fn {pid, _value} -> send(pid, {:mailbox_command, topic, payload}) end)
+      end)
+
+      :ok
+    end
   end
 
   @spec subscribe(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
   def subscribe(topic, opts \\ []) when is_binary(topic) do
     registry = Keyword.get(opts, :registry_name, @default_registry)
     Registry.register(registry, topic, [])
+  end
+
+  @spec mark_io_accepted(String.t(), map(), keyword()) :: :ok | {:error, term()}
+  def mark_io_accepted(receipt_id, metadata \\ %{}, opts \\ [])
+      when is_binary(receipt_id) and is_map(metadata) and is_list(opts) do
+    store = Keyword.get(opts, :receipt_store, @default_store)
+    ReceiptStore.mark_phase(store, receipt_id, "io_accepted", metadata)
+  end
+
+  defp wire_map(%_module{} = struct) do
+    struct
+    |> Map.from_struct()
+    |> stringify_keys()
+  end
+
+  defp wire_map(map) when is_map(map), do: stringify_keys(map)
+
+  defp stringify_keys(map) do
+    Map.new(map, fn
+      {key, value} when is_atom(key) -> {Atom.to_string(key), value}
+      {key, value} -> {key, value}
+    end)
   end
 end

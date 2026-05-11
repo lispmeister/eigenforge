@@ -1,6 +1,6 @@
 ---
 id: eig-j5tr
-status: open
+status: closed
 deps: [eig-p9ms, eig-a8hg, eig-193d]
 links: []
 created: 2026-05-10T05:36:54Z

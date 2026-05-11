@@ -2,7 +2,7 @@
 id: eig-eudn
 status: open
 deps: [eig-hs04, eig-193d]
-links: []
+links: [eig-hcxs]
 created: 2026-05-09T14:11:13Z
 type: feature
 priority: 2

@@ -17,7 +17,7 @@ defmodule Eigenforge.IO.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :inets, :ssl],
       mod: {Eigenforge.IO.Application, []}
     ]
   end
@@ -25,7 +25,8 @@ defmodule Eigenforge.IO.MixProject do
   defp deps do
     [
       {:eigenforge_contracts, in_umbrella: true},
-      {:eigenforge_core, in_umbrella: true}
+      {:eigenforge_core, in_umbrella: true},
+      {:websockex, "~> 0.5.1"}
     ]
   end
 end

@@ -5,19 +5,29 @@ defmodule Eigenforge.IO.Application do
 
   @impl true
   def start(_type, _args) do
-    Supervisor.start_link(children(), strategy: :one_for_one, name: Eigenforge.IO.Supervisor)
-  end
-
-  defp children do
-    case Eigenforge.Core.RuntimeConfig.load() do
-      {:ok, %Eigenforge.Core.RuntimeConfig{io_mode: :simulator} = config} ->
-        [{Eigenforge.IO.SimulatorClient, config}]
-
-      {:ok, _config} ->
-        []
-
-      {:error, _errors} ->
-        []
+    with {:ok, config} <- Eigenforge.Core.RuntimeConfig.load(),
+         :ok <- validate_startup_inputs(config) do
+      Supervisor.start_link(children(config), strategy: :one_for_one, name: Eigenforge.IO.Supervisor)
     end
   end
+
+  defp children(%Eigenforge.Core.RuntimeConfig{io_mode: :simulator} = config),
+    do: [
+      {Eigenforge.IO.CommandExecutionStore,
+       path: config.io_command_store_path, name: Eigenforge.IO.CommandExecutionStore},
+      {Eigenforge.IO.SimulatorClient, config}
+    ]
+
+  defp children(%Eigenforge.Core.RuntimeConfig{io_mode: :home_assistant} = config),
+    do: [
+      {Eigenforge.IO.CommandExecutionStore,
+       path: config.io_command_store_path, name: Eigenforge.IO.CommandExecutionStore},
+      {Eigenforge.IO.HomeAssistantClient, config}
+    ]
+
+  defp validate_startup_inputs(%Eigenforge.Core.RuntimeConfig{io_mode: :simulator} = config) do
+    Eigenforge.Core.SimulatorFixture.validate_directory(config.simulator_snapshots_dir)
+  end
+
+  defp validate_startup_inputs(%Eigenforge.Core.RuntimeConfig{}), do: :ok
 end

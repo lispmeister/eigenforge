@@ -24,6 +24,12 @@ defmodule Eigenforge.Dashboard.MixProject do
 
   defp deps do
     [
+      {:phoenix, "~> 1.7.14"},
+      {:phoenix_html, "~> 4.1"},
+      {:phoenix_live_view, "~> 1.0"},
+      {:bandit, "~> 1.5"},
+      {:jason, "~> 1.4"},
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:eigenforge_contracts, in_umbrella: true},
       {:eigenforge_core, in_umbrella: true}
     ]
