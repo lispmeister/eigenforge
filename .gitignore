@@ -5,3 +5,4 @@ archive
 library
 _build
 deps
+log
