@@ -8,8 +8,8 @@ guidelines in *Writing the Laboratory Notebook*. It records engineering
 sessions, design decisions, experiments, failures, and verification results
 that do not fit cleanly into commit messages.
 
-**Last updated:** 2026-05-10
-**Total entries:** 4
+**Last updated:** 2026-05-12
+**Total entries:** 5
 **How to maintain:** Add one chronological row every time a journal file is
 created.
 
@@ -19,6 +19,7 @@ created.
 | 2026-05-08 | [journal-2026-05-08b.md](journal-2026-05-08b.md) | Added Codex-facing AGENTS.md lab journal instructions | Project process |
 | 2026-05-09 | [journal-2026-05-09.md](journal-2026-05-09.md) | Reworked V1 around per-core append-only SQLite command ledgers and aligned spec, trace code, HTML, and tickets | Prototype V1 design |
 | 2026-05-10 | [journal-2026-05-10.md](journal-2026-05-10.md) | Clarified Prototype V1 spec ambiguities from SPEC-V1-FIXES-001 and fresh review | Prototype V1 design |
+| 2026-05-12 | [journal-2026-05-12.md](journal-2026-05-12.md) | Completed remaining V1 test-gap tickets and verified the umbrella suite | Prototype V1 implementation |
 
 ## Attachments / Supporting Materials
 
