@@ -333,11 +333,12 @@
       <p class="kicker">Prototype V1 · Implementation Spec Visualized</p>
       <h1>Eigenforge Control Loop, Contracts, Ledger, and IO Boundaries</h1>
       <p class="lede">
-        V1 proves a small, inspectable input/output control loop with the same
-        persistence boundary the quorum design will need later: observe live IO,
-        reason deterministically, finalize the decision, commit it to the local
-        core SQLite ledger, issue a signed command envelope, execute through IO,
-        then record core-authored after-action truth.
+        V1 proves the small, inspectable input/output control loop now present
+        in the repo, with the same persistence boundary the later quorum design
+        will reuse: observe live IO, reason deterministically, finalize the
+        decision, commit it to the local core SQLite ledger, issue a signed
+        command envelope, execute through IO, then record core-authored
+        after-action truth.
       </p>
     </div>
   </header>
@@ -362,7 +363,7 @@
           <h3>V1 Defers</h3>
           <span class="pill">Three-core quorum</span>
           <span class="pill">LLM reasoners</span>
-          <span class="pill">Manual commands</span>
+          <span class="pill">Manual dashboard intents</span>
           <span class="pill">Hysteresis</span>
           <span class="pill">InfluxDB charts</span>
           <span class="pill">ESPHome direct control</span>
@@ -370,10 +371,13 @@
           <span class="pill">External anchoring</span>
         </div>
         <div class="card">
-          <h3>Implementation Gate</h3>
+          <h3>Current Status</h3>
           <p>
-            Home Assistant integration and LiveView dashboard work wait until
-            simulator traces pass for fan-on, no-action, and stale-deny cases.
+            V1 is already implemented in the repo. The remaining tracked work is
+            a V2-only Phoenix dependency warning investigation, while simulator
+            traces, Home Assistant integration, the local SQLite ledger, the
+            mailbox receipt store, and the read-only dashboard are the active
+            verification surfaces.
           </p>
           <pre>simulator snapshot
 -> core reasoner
@@ -1110,10 +1114,10 @@ mix eigenforge.trace.verify \
     </section>
 
     <section>
-      <h2>Build Slices And Deferrals</h2>
+      <h2>Implementation Status And Forward Path</h2>
       <div class="grid">
         <div class="card">
-          <h3>First Build Slice</h3>
+          <h3>Implemented V1 Slice</h3>
           <span class="pill">umbrella scaffolding</span>
           <span class="pill">contracts</span>
           <span class="pill">canonical JSON</span>
@@ -1131,7 +1135,7 @@ mix eigenforge.trace.verify \
           <span class="pill">first three fixtures</span>
         </div>
         <div class="card">
-          <h3>After Simulator Slice</h3>
+          <h3>Operational Notes</h3>
           <span class="pill">HA reconnect behavior</span>
           <span class="pill">LiveView dashboard</span>
           <span class="pill">fault-injection mini-slice</span>
@@ -1142,7 +1146,7 @@ mix eigenforge.trace.verify \
           <span class="pill">non-fan actuator stubs</span>
         </div>
         <div class="card">
-          <h3>V2 / V3 Direction</h3>
+          <h3>Future Direction</h3>
           <span class="pill">three core nodes</span>
           <span class="pill">2-of-3 voting</span>
           <span class="pill">rotating finalizer</span>
