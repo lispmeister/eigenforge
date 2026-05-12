@@ -286,6 +286,10 @@
       align-items: start;
     }
 
+    .two-col.roomy {
+      grid-template-columns: 1fr;
+    }
+
     .note {
       border-left: 4px solid var(--core);
       padding: 12px 14px;
@@ -311,6 +315,10 @@
         grid-template-columns: 1fr;
       }
 
+      .two-col.roomy {
+        grid-template-columns: 1fr;
+      }
+
       table,
       thead,
       tbody {
@@ -322,7 +330,7 @@
       }
 
       .diagram.compact svg {
-        min-width: 500px;
+        min-width: 0;
       }
     }
   </style>
@@ -609,7 +617,7 @@
 
     <section>
       <h2>Decision Logic</h2>
-      <div class="two-col">
+      <div class="two-col roomy">
         <div>
           <p>
             The deterministic V1 reasoner only treats CO2 as control-relevant.
@@ -978,7 +986,7 @@
 
     <section>
       <h2>Streams, Topics, And Projections</h2>
-      <div class="two-col">
+      <div class="two-col roomy">
         <div>
           <table>
             <thead>
