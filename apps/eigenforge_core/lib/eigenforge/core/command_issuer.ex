@@ -23,6 +23,7 @@ defmodule Eigenforge.Core.CommandIssuer do
           | {:decision_event_id, String.t()}
           | {:reasoner_outcome_event_id, String.t()}
           | {:capability_event_id, String.t() | nil}
+          | {:effect_epoch, String.t() | nil}
 
   @spec issue(ReasonerOutcome.t(), term(), PolicyDecision.t(), term(), binary(), [issue_opt()]) ::
           {:ok, CommandEnvelope.t()} | {:ok, nil}
@@ -42,10 +43,10 @@ defmodule Eigenforge.Core.CommandIssuer do
         TraceIdentity.stable_id("consensus", [snapshot.snapshot_id])
       end)
 
-    base = %{
+      base = %{
       command_id: TraceIdentity.stable_id("cmd", [snapshot.snapshot_id, reasoner.requested_state]),
       idempotency_key: idempotency_key(snapshot, reasoner, policy, consensus_decision_id),
-      effect_key: effect_key(snapshot, reasoner),
+      effect_key: effect_key(snapshot, reasoner, Keyword.get(opts, :effect_epoch)),
       subject: @subject,
       target: @target,
       action: @action,
@@ -109,20 +110,22 @@ defmodule Eigenforge.Core.CommandIssuer do
     "idem:v1:" <> Contracts.hash_canonical(payload)
   end
 
-  defp effect_key(snapshot, reasoner) do
+  defp effect_key(snapshot, reasoner, effect_epoch_override) do
     payload = %{
       format_version: @format_version,
       room_id: snapshot.room_id,
       target: @target,
       action: @action,
       requested_state: reasoner.requested_state,
-      effect_epoch: effect_epoch(snapshot)
+      effect_epoch: effect_epoch(snapshot, effect_epoch_override)
     }
 
     "effect:v1:" <> Contracts.hash_canonical(payload)
   end
 
-  defp effect_epoch(snapshot) do
+  defp effect_epoch(_snapshot, override) when is_binary(override) and override != "", do: override
+
+  defp effect_epoch(snapshot, _override) do
     case map_get(snapshot.source_observation_ids, "fan") do
       value when is_binary(value) and value != "" -> value
       _ -> "startup"

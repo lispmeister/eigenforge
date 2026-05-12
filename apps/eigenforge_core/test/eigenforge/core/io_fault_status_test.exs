@@ -164,4 +164,43 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
 
     assert Enum.map(rows, & &1["event_type"]) == ["ledger_genesis", "io_fault_observed"]
   end
+
+  test "unwritable log paths return an error and do not persist the fault", %{
+    db_path: db_path,
+    log_path: log_path,
+    secret: secret,
+    writer: writer,
+    registry_name: registry_name
+  } do
+    File.rm_rf!(log_path)
+    File.mkdir_p!(log_path)
+
+    client =
+      start_supervised!(
+        {IoFaultStatus,
+         log_path: log_path,
+         hmac_secret: secret,
+         home_assistant_token: "ha-token-secret",
+         default_room_id: "placeholder",
+         writer: writer,
+         registry_name: registry_name,
+         name: Module.concat(__MODULE__, "Unwritable#{System.unique_integer([:positive])}")}
+      )
+
+    assert {:error, _reason} =
+             IoFaultStatus.record(client, %{
+               source: "home_assistant",
+               fault_type: "connection_down",
+               correlation_id: "ha-conn-unwritable",
+               message: "adapter unavailable"
+             })
+
+    assert {:ok, rows} =
+             LedgerSQLite.query_json(
+               db_path,
+               "SELECT event_type FROM ledger_events ORDER BY sequence ASC;"
+             )
+
+    assert Enum.map(rows, & &1["event_type"]) == ["ledger_genesis"]
+  end
 end

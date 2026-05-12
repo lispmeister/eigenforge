@@ -8,30 +8,34 @@ where AI cognition can participate in system operation without bypassing
 explicit authority, policy, durable decision/action records, adapters, or later
 quorum.
 
-The current work has been narrowed into a first prototype spec:
+The repository currently implements the V1 prototype slice described in:
 
 - [PROTOTYPE-V1-SPEC.md](PROTOTYPE-V1-SPEC.md)
 - [OS-SKETCH-9.md](OS-SKETCH-9.md)
 
 ## Current Prototype
 
-V1 proves the input/output control loop before adding voting and quorum.
+V1 proves the input/output control loop before adding voting and quorum. The
+current codebase includes the simulator-backed trace path, the Home Assistant
+adapter, the local SQLite ledger, the mailbox receipt store, and the read-only
+dashboard.
 
-The prototype will use:
+The prototype uses:
 
 - Elixir/OTP on Linux/PREEMPT_RT or ordinary Linux for local development.
-- An Elixir umbrella project.
+- An Elixir umbrella project with `contracts`, `mailbox`, `io`, `core`, and
+  `dashboard` apps.
 - Home Assistant as the first device adapter.
 - Home Assistant WebSocket events for sensor ingest.
 - Home Assistant REST calls for fan execution.
-- Postgres as the durable decision/action ledger.
+- Local SQLite as the durable decision/action ledger.
 - HMAC-SHA256 signatures for ledger events, command envelopes, device config,
   and capability grants.
 - Schema-backed generated contract modules for control messages.
 - Static signed capability grants loaded from config.
 - Plain Elixir policy functions.
 - A deterministic rule stub in place of AI inference.
-- Phoenix as the first read-only dashboard.
+- Phoenix LiveView as the read-only dashboard.
 
 The first actionable control rule is:
 
@@ -52,9 +56,9 @@ no actuator command.
 ## Contract Schemas
 
 V1 control messages are defined from checked-in JSON Schemas under
-`priv/schemas`. Generated Elixir contract modules live under
-`lib/eigenforge/contracts/generated` and share canonical JSON, hashing, and
-HMAC helpers from `Eigenforge.Contracts`.
+`apps/eigenforge_contracts/priv/schemas`. Generated Elixir contract modules
+live under `apps/eigenforge_contracts/lib/eigenforge/contracts/generated` and
+share canonical JSON, hashing, and HMAC helpers from `Eigenforge.Contracts`.
 
 Regenerate contract modules with:
 
@@ -78,10 +82,11 @@ is a short compatibility pointer for Claude-oriented tooling.
 
 ## Prototype Architecture
 
-The planned umbrella shape is:
+The current umbrella shape is:
 
 ```text
 eigenforge_umbrella
+  apps/eigenforge_contracts
   apps/eigenforge_mailbox
   apps/eigenforge_io
   apps/eigenforge_core
@@ -90,6 +95,8 @@ eigenforge_umbrella
 
 Responsibilities:
 
+- `eigenforge_contracts`: checked-in schemas, generated contracts, canonical
+  JSON, hashing, and HMAC helpers.
 - `eigenforge_mailbox`: dumb channel manager for routing, delivery, and read
   projections.
 - `eigenforge_io`: passive Home Assistant/simulator ingest and command adapter.
@@ -106,6 +113,7 @@ dashboard are kept separate even though the first prototype runs locally.
 V1 reads:
 
 - CO2 sensor state from Home Assistant.
+- Humidity and temperature sensor state as observe-only inputs.
 
 V1 can execute:
 
@@ -127,8 +135,8 @@ file ignored by git. A committed [.env.example](/Users/fix/projects/claude-code/
 contains the required simulator, Home Assistant, HMAC, ledger, and IO log
 placeholders.
 
-The app should fail fast when required Home Assistant or signing configuration
-is missing.
+The app fails fast when required Home Assistant or signing configuration is
+missing.
 
 The repo also includes signed sample runtime config artifacts for local bring-up:
 
@@ -140,17 +148,20 @@ The repo also includes signed sample runtime config artifacts for local bring-up
 The committed signatures use the placeholder sample secret from `.env.example`
 so they stay verifiable without committing a real secret.
 
+The runtime now relies on local SQLite databases, not Postgres. The primary
+decision/action ledger and mailbox receipt store are file-backed and intended
+for local/demo scale.
+
 ## Ledger And Capabilities
 
 V1 treats durable decision/action history as part of the core prototype, not a
 later add-on.
 
-All persisted ledger events should be signed with HMAC-SHA256 and
-hash-chained. Capability grants are also signed and loaded from config files at
-startup.
+All persisted ledger events are signed with HMAC-SHA256 and hash-chained.
+Capability grants are also signed and loaded from config files at startup.
 
-The prototype should include a small Mix task or CLI helper to create signed
-capability grant files, for example:
+The repo includes Mix tasks to create signed capability grant files, for
+example:
 
 ```text
 mix eigenforge.capability.grant \
@@ -176,9 +187,9 @@ anything beyond local development.
 
 ## Dashboard
 
-The V1 dashboard is Phoenix-only and read-only.
+The V1 dashboard is Phoenix LiveView-only and read-only.
 
-It should show:
+It shows:
 
 - latest CO2 reading;
 - fan state;
@@ -190,10 +201,18 @@ It should show:
 
 Manual dashboard commands are excluded from V1.
 
+The dashboard reads from live PubSub streams and local SQLite-backed read
+models only. It does not call Home Assistant or write to the ledger.
+
+## Current Status
+
+The V1 implementation set is complete in the repo. The only currently open
+tracked work is a V2-only Phoenix dependency warning investigation.
+
 ## Future Work
 
 The following ideas remain part of the broader Eigenforge direction, but are
-outside the first prototype.
+outside V1.
 
 ### Voting And Quorum
 

@@ -67,7 +67,7 @@ defmodule Eigenforge.Dashboard.DashboardLiveTest do
                      event_id: "fault-1",
                      room_id: "placeholder",
                      source: "simulator",
-                     fault_type: "recovered",
+                     fault_type: "connection_up",
                      observed_at: "2026-05-10T12:00:00.000Z",
                      metadata: %{}
                    })
@@ -94,7 +94,7 @@ defmodule Eigenforge.Dashboard.DashboardLiveTest do
     assert {:ok, _view, html} = live(conn, "/")
     assert html =~ "Read-only control surface"
     assert html =~ "1200 ppm"
-    assert html =~ "recovered"
+    assert html =~ "connection_up"
     assert html =~ "Recent IO Events"
     assert html =~ "No recent ledger events yet" or html =~ "Recent Ledger Events"
 

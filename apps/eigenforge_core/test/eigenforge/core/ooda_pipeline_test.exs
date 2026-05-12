@@ -433,6 +433,134 @@ defmodule Eigenforge.Core.OodaPipelineTest do
     assert payload["status"] == "timed_out"
   end
 
+  test "restart recovery honors persisted deadlines after a wall-clock jump" do
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "eigenforge-ooda-recovery-wall-clock-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    cleanup_artifacts(db_path)
+
+    pubsub_registry =
+      Module.concat(__MODULE__, "RecoveryClockCoreRegistry#{System.unique_integer([:positive])}")
+
+    mailbox_registry =
+      Module.concat(__MODULE__, "RecoveryClockMailboxRegistry#{System.unique_integer([:positive])}")
+
+    receipt_store_name =
+      Module.concat(__MODULE__, "RecoveryClockReceiptStore#{System.unique_integer([:positive])}")
+
+    writer_name = Module.concat(__MODULE__, "RecoveryClockWriter#{System.unique_integer([:positive])}")
+    subscriber_name = Module.concat(__MODULE__, "RecoveryClockSubscriber#{System.unique_integer([:positive])}")
+    restarted_name = Module.concat(__MODULE__, "RecoveryClockSubscriberRestart#{System.unique_integer([:positive])}")
+
+    clock =
+      start_supervised!(
+        {Agent,
+         fn ->
+           %{
+             utc: ~U[2026-05-08 12:00:00.000Z],
+             monotonic: 1_000
+           }
+         end}
+      )
+
+    start_supervised!({Registry, keys: :duplicate, name: pubsub_registry})
+    start_supervised!({Registry, keys: :duplicate, name: mailbox_registry})
+
+    writer =
+      start_supervised!(
+        {LedgerWriter,
+         db_path: db_path, core_node_id: "core_a", secret: "pipeline-secret", name: writer_name}
+      )
+
+    receipt_store =
+      start_supervised!(
+        {ReceiptStore,
+         path: db_path <> ".receipts.json", secret: "pipeline-secret", name: receipt_store_name}
+      )
+
+    subscriber =
+      start_supervised!(
+        {SnapshotSubscriber,
+         room_id: "placeholder",
+         pubsub_registry: pubsub_registry,
+         mailbox_registry: mailbox_registry,
+         mailbox_receipt_store: receipt_store,
+         writer: writer,
+         db_path: db_path,
+         secret: "pipeline-secret",
+         utc_now: fn -> Agent.get(clock, & &1.utc) end,
+         monotonic_now_ms: fn -> Agent.get(clock, & &1.monotonic) end,
+         after_action_timeout_ms: 100,
+         name: subscriber_name}
+      )
+
+    on_exit(fn -> cleanup_artifacts(db_path) end)
+
+    assert {:ok, _} = CommandPublisher.subscribe("commands:io", registry_name: mailbox_registry)
+
+    fixture = %{
+      "snapshot_id" => "snap-recovery-clock-1",
+      "snapshot_seq" => 1,
+      "snapshot_hash" => String.duplicate("e", 64),
+      "room_id" => "placeholder",
+      "co2_ppm" => 1200,
+      "humidity_basis_points" => 4500,
+      "temperature_millicelsius" => 22_000,
+      "fan_state" => "off",
+      "source_entity_ids" => %{},
+      "source_observation_ids" => %{"fan" => "fan-obs-1"},
+      "source_observed_at" => %{},
+      "source_received_seq" => %{"fan" => 1},
+      "source_received_monotonic_ms" => %{"fan" => 1},
+      "source_status" => %{},
+      "normalized_at" => "2026-05-08T12:00:00.000Z",
+      "freshness" => "fresh"
+    }
+
+    assert :ok = PubSub.publish("io_state:room:placeholder", fixture, registry_name: pubsub_registry)
+    assert_receive {:mailbox_command, "commands:io", delivery}, 1_000
+
+    assert :ok =
+             ReceiptStore.mark_phase(receipt_store, delivery["receipt"]["receipt_id"], "io_accepted", %{
+               accepted_at: "2026-05-08T12:00:00.000Z"
+             })
+
+    Process.exit(subscriber, :normal)
+    Process.sleep(50)
+
+    Agent.update(clock, fn _ ->
+      %{
+        utc: ~U[2101-05-10 12:00:00.000Z],
+        monotonic: 1_050
+      }
+    end)
+
+    start_supervised!(
+      {SnapshotSubscriber,
+       room_id: "placeholder",
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       writer: writer,
+       db_path: db_path,
+       secret: "pipeline-secret",
+       utc_now: fn -> Agent.get(clock, & &1.utc) end,
+       monotonic_now_ms: fn -> Agent.get(clock, & &1.monotonic) end,
+       after_action_timeout_ms: 100,
+       name: restarted_name}
+    )
+
+    refute_receive {:mailbox_command, "commands:io", _redelivery}, 200
+
+    payload_json = wait_for_after_action_payload(db_path)
+    payload = Contracts.decode_json!(payload_json)
+    assert payload["command_id"] == delivery["command"]["command_id"]
+    assert payload["status"] == "timed_out"
+  end
+
   test "restart recovery times out commands persisted in receipt_stored and publish_attempted phases without redelivery" do
     Enum.each(["receipt_stored", "publish_attempted"], fn phase ->
       assert_restart_recovery_timeout_for_phase(phase)

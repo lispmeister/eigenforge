@@ -64,7 +64,7 @@ defmodule Eigenforge.Core.AfterActionObserver do
           {:ok, AfterActionEvent.t()} | {:error, term()}
   def interpret_observation(%CommandEnvelope{} = command, pre_command_snapshot, observation)
       when is_map(pre_command_snapshot) and is_map(observation) do
-    with :ok <- validate_observation_order(command, observation),
+    with :ok <- validate_observation_order(pre_command_snapshot, observation),
          {:ok, status} <- observation_status(command, pre_command_snapshot, observation) do
       {:ok,
        build_after_action(command, %{
@@ -81,9 +81,11 @@ defmodule Eigenforge.Core.AfterActionObserver do
   @doc """
   Interprets a terminal adapter fault into a terminal after-action event.
   """
-  @spec interpret_fault(CommandEnvelope.t(), fault()) :: {:ok, AfterActionEvent.t()} | {:error, term()}
-  def interpret_fault(%CommandEnvelope{} = command, fault) when is_map(fault) do
-    with :ok <- validate_observation_order(command, fault),
+  @spec interpret_fault(CommandEnvelope.t(), fault(), map() | nil) ::
+          {:ok, AfterActionEvent.t()} | {:error, term()}
+  def interpret_fault(%CommandEnvelope{} = command, fault, pre_command_snapshot \\ nil)
+      when is_map(fault) do
+    with :ok <- validate_observation_order(pre_command_snapshot || command, fault),
          {:ok, status} <- fault_status(fault) do
       {:ok,
        build_after_action(command, %{
@@ -151,9 +153,9 @@ defmodule Eigenforge.Core.AfterActionObserver do
     end
   end
 
-  defp validate_observation_order(command, evidence) do
-    command_seq = source_seq(command)
-    command_ms = source_monotonic_ms(command)
+  defp validate_observation_order(pre_command_snapshot, evidence) do
+    command_seq = accepted_seq(pre_command_snapshot)
+    command_ms = accepted_monotonic_ms(pre_command_snapshot)
     evidence_seq = Map.get(evidence, :source_received_seq) || Map.get(evidence, "source_received_seq")
     evidence_ms = Map.get(evidence, :source_received_monotonic_ms) || Map.get(evidence, "source_received_monotonic_ms")
 
@@ -169,18 +171,38 @@ defmodule Eigenforge.Core.AfterActionObserver do
     end
   end
 
-  defp source_seq(command) do
-    command.scope
-    command
-    |> Map.get(:snapshot_seq)
+  defp accepted_seq(snapshot) do
+    case snapshot do
+      %CommandEnvelope{} = command ->
+        Map.get(command, :snapshot_seq)
+
+      map when is_map(map) ->
+        map
+        |> Map.get("source_received_seq", %{})
+        |> Map.get("fan")
+
+      _ ->
+        nil
+    end
   end
 
-  defp source_monotonic_ms(command) do
-    command
-    |> Map.get(:metadata, %{})
-    |> case do
+  defp accepted_monotonic_ms(snapshot) do
+    case snapshot do
+      %CommandEnvelope{} = command ->
+        command
+        |> Map.get(:metadata, %{})
+        |> case do
+          map when is_map(map) ->
+            Map.get(map, "command_source_received_monotonic_ms") || Map.get(map, :command_source_received_monotonic_ms)
+
+          _ ->
+            nil
+        end
+
       map when is_map(map) ->
-        Map.get(map, "command_source_received_monotonic_ms") || Map.get(map, :command_source_received_monotonic_ms)
+        map
+        |> Map.get("source_received_monotonic_ms", %{})
+        |> Map.get("fan")
 
       _ ->
         nil

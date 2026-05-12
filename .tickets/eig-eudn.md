@@ -1,6 +1,6 @@
 ---
 id: eig-eudn
-status: open
+status: closed
 deps: [eig-hs04, eig-193d]
 links: [eig-hcxs]
 created: 2026-05-09T14:11:13Z

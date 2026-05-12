@@ -62,11 +62,11 @@ defmodule Eigenforge.Dashboard.ReadModelTest do
                source_app: "eigenforge_core",
                payload:
                  Contracts.signable_map(
-                   IoFaultStatusEvent.new!(%{
+                     IoFaultStatusEvent.new!(%{
                      event_id: "fault-1",
                      room_id: "placeholder",
                      source: "simulator",
-                     fault_type: "recovered",
+                     fault_type: "connection_up",
                      observed_at: "2026-05-10T12:00:00.000Z",
                      metadata: %{}
                    })
@@ -75,13 +75,13 @@ defmodule Eigenforge.Dashboard.ReadModelTest do
 
     assert {:ok, view} = ReadModel.snapshot(db_path, "placeholder")
     assert view["simulator_mode"]
-    assert view["connection_status"] == "recovered"
+    assert view["connection_status"] == "connection_up"
     assert view["sensor_state"]["co2_ppm"] == 1200
     assert view["fan_state"]["status"] == "not_yet_observed"
     assert view["reasoner_outcome"] == "not_yet_observed"
     assert view["policy_decision"] == "not_yet_observed"
     assert view["after_action_status"] == "not_yet_observed"
-    assert Enum.any?(view["recent_io_faults"], &(&1["payload"]["fault_type"] == "recovered"))
+    assert Enum.any?(view["recent_io_faults"], &(&1["payload"]["fault_type"] == "connection_up"))
 
     assert {:ok, count_rows} = LedgerSQLite.query_json(db_path, "SELECT count(*) FROM ledger_events;")
     assert [%{"count(*)" => count}] = count_rows

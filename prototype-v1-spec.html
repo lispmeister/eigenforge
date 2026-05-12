@@ -955,7 +955,8 @@
           <h3>Home Assistant Mode</h3>
           <p><code>EIGENFORGE_IO_MODE=home_assistant</code></p>
           <p>Uses the Home Assistant WebSocket API for state ingest and REST API for fan commands via <code>switch.turn_on</code> and <code>switch.turn_off</code>.</p>
-          <p>Missing required Home Assistant config or HMAC secret fails startup. Unreachable Home Assistant may start degraded and retry with logarithmic backoff up to <code>EIGENFORGE_HA_RECONNECT_MAX_MS</code>.</p>
+          <p>Missing required Home Assistant config or HMAC secret fails startup. Unreachable Home Assistant may start degraded and retry with deterministic capped exponential backoff up to <code>EIGENFORGE_HA_RECONNECT_MAX_MS</code>.</p>
+          <p>Static config validation is fail-fast; dynamic wrong or missing entities keep the room in degraded no-physical-control mode until observations validate again.</p>
         </div>
         <div class="card">
           <h3>Simulator Mode</h3>
@@ -1030,9 +1031,17 @@
           <span class="pill">Policy decision</span>
           <span class="pill">Last command</span>
           <span class="pill">After-action status</span>
+          <span class="pill">pending_command</span>
+          <span class="pill">not_yet_observed</span>
+          <span class="pill">degraded</span>
           <span class="pill">Recent ledger events</span>
           <span class="pill">Raw IO faults</span>
           <span class="pill">Stale sensor alerts</span>
+        </div>
+        <div class="card">
+          <h3>Mailbox And Restart Semantics</h3>
+          <p>Mailbox delivery remains mechanical only. Signed receipts are persisted before publish and phase-tracked as <code>receipt_stored</code>, <code>publish_attempted</code>, and <code>io_accepted</code>.</p>
+          <p>Receipt-store corruption starts degraded and blocks publish or redelivery until repair. Pending restart recovery classifies work conservatively from persisted UTC deadlines.</p>
         </div>
       </div>
     </section>
@@ -1057,19 +1066,31 @@
           <tr>
             <td>CO2 high turns fan on</td>
             <td><code>co2_ppm=1200</code>, fan off, fresh</td>
-            <td>propose fan on → capability allow → policy allow → finalized local commit → command envelope → after-action confirmed changed</td>
+            <td>propose fan on → capability allow → policy allow → finalized local commit → command envelope with causal references and <code>effect_key</code> → after-action confirmed changed</td>
             <td class="allow">Delivered after local commit</td>
           </tr>
           <tr>
             <td>CO2 high, fan already on</td>
             <td><code>co2_ppm=1200</code>, fan on, fresh</td>
-            <td>propose no-action → finalized no-action decision in local SQLite</td>
+            <td>propose no-action → capability not_checked → policy no_command → finalized no-action decision in local SQLite</td>
+            <td>No command</td>
+          </tr>
+          <tr>
+            <td>CO2 nominal, fan off</td>
+            <td><code>co2_ppm</code> below threshold, fan off, fresh</td>
+            <td>propose no-action → capability not_checked → policy no_command → runtime coalescing prevents duplicate physical work</td>
             <td>No command</td>
           </tr>
           <tr>
             <td>Stale CO2 denies action</td>
             <td><code>co2_ppm=1200</code>, fan off, stale</td>
             <td>insufficient fresh data → deny stale snapshot → finalized stale deny event</td>
+            <td>No command</td>
+          </tr>
+          <tr>
+            <td>Malformed CO2 denies action</td>
+            <td>Malformed or missing CO2 observation</td>
+            <td>fault observed → safe snapshot handling → deny physical command with durable fault visibility</td>
             <td>No command</td>
           </tr>
           <tr>
@@ -1113,6 +1134,7 @@ mix eigenforge.trace.verify \
           <h3>After Simulator Slice</h3>
           <span class="pill">HA reconnect behavior</span>
           <span class="pill">LiveView dashboard</span>
+          <span class="pill">fault-injection mini-slice</span>
           <span class="pill">quorum catch-up</span>
           <span class="pill">SQLite hardening</span>
           <span class="pill">node fault events</span>

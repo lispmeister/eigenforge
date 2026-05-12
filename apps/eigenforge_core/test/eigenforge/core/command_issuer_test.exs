@@ -43,6 +43,22 @@ defmodule Eigenforge.Core.CommandIssuerTest do
     refute command_with_fan.effect_key == command_without_fan.effect_key
   end
 
+  test "effect key can be seeded from a terminal after-action epoch when no fan observation is present" do
+    snapshot = snapshot(nil)
+    reasoner = reasoner(snapshot, "outcome-1")
+    policy = policy(snapshot, reasoner, "policy-1")
+
+    assert {:ok, startup_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret)
+
+    assert {:ok, terminal_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret,
+               effect_epoch: "after-action-1"
+             )
+
+    refute startup_command.effect_key == terminal_command.effect_key
+  end
+
   test "distinct consensus decisions produce distinct idempotency keys" do
     snapshot = snapshot("obs-fan-1")
     reasoner = reasoner(snapshot, "outcome-1")

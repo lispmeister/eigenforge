@@ -126,7 +126,8 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
              consensus_decision_id: refs.consensus_decision_id,
              decision_event_id: refs.command_event_id,
              reasoner_outcome_event_id: refs.reasoner_event_id,
-             capability_event_id: refs.capability_event_id
+             capability_event_id: refs.capability_event_id,
+             effect_epoch: resolved_effect_epoch(snapshot, state)
            ),
          {:ok, guarded_command} <- apply_in_flight_guard(command, snapshot.room_id, state),
          payloads <- [reasoner, capability, policy, guarded_command] |> Enum.reject(&is_nil/1),
@@ -250,7 +251,7 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
                source_received_monotonic_ms:
                  get_in(event.metadata || %{}, ["source_received_monotonic_ms"]),
                reported_at: event.observed_at
-             }) do
+             }, pending.pre_command_snapshot) do
           {:ok, after_action} ->
             refs = pending.refs
             synthetic_snapshot = pending.pre_command_snapshot
@@ -504,12 +505,39 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
       "source_entity_ids" => %{},
       "source_observation_ids" => %{},
       "source_observed_at" => %{},
-      "source_received_seq" => %{"fan" => command.snapshot_seq},
-      "source_received_monotonic_ms" => %{},
+      "source_received_seq" => %{"fan" => room_state["source_received_seq_fan"] || command.snapshot_seq},
+      "source_received_monotonic_ms" => %{"fan" => room_state["source_received_monotonic_ms_fan"]},
       "source_status" => %{},
       "normalized_at" => room_state["updated_at"] || command.issued_at,
       "freshness" => room_state["freshness"] || "fresh"
     }
+  end
+
+  defp resolved_effect_epoch(snapshot, %{db_path: nil}) do
+    effect_epoch(snapshot)
+  end
+
+  defp resolved_effect_epoch(snapshot, state) do
+    case Map.get(snapshot.source_observation_ids, "fan") || Map.get(snapshot.source_observation_ids, :fan) do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        case fetch_room_state(state) do
+          {:ok, room_state} ->
+            room_state["latest_after_action_id"] || "startup"
+
+          _ ->
+            "startup"
+        end
+    end
+  end
+
+  defp effect_epoch(snapshot) do
+    case Map.get(snapshot.source_observation_ids, "fan") || Map.get(snapshot.source_observation_ids, :fan) do
+      value when is_binary(value) and value != "" -> value
+      _ -> "startup"
+    end
   end
 
   defp event_refs_from_command(command) do

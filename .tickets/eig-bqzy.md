@@ -1,6 +1,6 @@
 ---
 id: eig-bqzy
-status: open
+status: closed
 deps: [eig-o1sj, eig-q25o, eig-gu9r]
 links: []
 created: 2026-05-10T05:07:24Z

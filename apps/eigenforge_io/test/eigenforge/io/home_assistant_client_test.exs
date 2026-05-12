@@ -127,6 +127,19 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     def command(_conn, _request), do: {:error, :not_connected}
   end
 
+  defmodule ConnectedTransport do
+    @behaviour Eigenforge.IO.HomeAssistantClient.Transport
+
+    @impl true
+    def connect(_url, _token), do: {:ok, :fake_conn, FlakyTransport.valid_states()}
+
+    @impl true
+    def connect(url, token, _opts), do: connect(url, token)
+
+    @impl true
+    def command(_conn, _request), do: {:ok, %{accepted: true}}
+  end
+
   setup do
     Process.delete(:ha_connect_attempts)
 
@@ -641,6 +654,66 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-bad")
   end
 
+  test "invalid command signatures and receipt mismatches are rejected before dispatch", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    client =
+      start_supervised!(
+        {HomeAssistantClient,
+         room_id: "placeholder",
+         home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+         hmac_secret: "ha-secret",
+         ha_reconnect_max_ms: 1_000,
+         io_fault_status: io_fault_status,
+         pubsub_registry: pubsub_registry,
+         mailbox_registry: mailbox_registry,
+         mailbox_receipt_store: receipt_store,
+         command_execution_store: command_store,
+         command_observer: self(),
+         transport: ConnectedTransport,
+         name: Module.concat(__MODULE__, "MismatchClient#{System.unique_integer([:positive])}")})
+
+    Process.sleep(100)
+
+    command = signed_command("cmd-invalid", "actuator:fan", "on")
+
+    assert {:ok, receipt} =
+             ReceiptStore.store_receipt(
+               receipt_store,
+               "commands:io",
+               Contracts.signable_map(command),
+               ledger_sequence: 16,
+               ledger_event_hash: String.duplicate("5", 64),
+               decision_event_id: command.decision_event_id
+             )
+
+    assert :ok =
+             ReceiptStore.mark_phase(receipt_store, receipt.receipt_id, "publish_attempted", %{
+               published_at: receipt.delivered_at
+             })
+
+    assert {:ok, entry} = ReceiptStore.fetch(receipt_store, receipt.receipt_id)
+
+    bad_command = Map.put(wire_command(command), "signature", "tampered-signature")
+    bad_receipt_command = put_in(entry, ["receipt", "command_id"], "cmd-other")
+    bad_receipt_decision = put_in(entry, ["receipt", "decision_event_id"], "event-other")
+
+    send(client, {:mailbox_command, "commands:io", %{"command" => bad_command, "receipt" => entry["receipt"]}})
+    send(client, {:mailbox_command, "commands:io", %{"command" => wire_command(command), "receipt" => bad_receipt_command["receipt"]}})
+    send(client, {:mailbox_command, "commands:io", %{"command" => wire_command(command), "receipt" => bad_receipt_decision["receipt"]}})
+
+    refute_receive {:transport_command, _request, _result}, 500
+    refute_receive {:transport_command, _request, _result}, 100
+    refute_receive {:transport_command, _request, _result}, 100
+
+    assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-invalid")
+  end
+
   test "degraded command execution stores block physical execution after restart", %{
     pubsub_registry: pubsub_registry,
     mailbox_registry: mailbox_registry,
@@ -670,8 +743,7 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
        command_execution_store: corrupt_store,
        command_observer: self(),
        transport: FlakyTransport,
-       name: Module.concat(__MODULE__, "CorruptStoreClient#{System.unique_integer([:positive])}")}
-    )
+       name: Module.concat(__MODULE__, "CorruptStoreClient#{System.unique_integer([:positive])}")})
 
     Process.sleep(1_200)
 
@@ -686,6 +758,82 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
 
     refute_receive {:transport_command, _request, _result}, 500
     assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-store")
+  end
+
+  test "persisted duplicate idempotency keys are rejected after restart", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    client_name = Module.concat(__MODULE__, "RestartClient#{System.unique_integer([:positive])}")
+
+    client =
+      start_supervised!(
+        {HomeAssistantClient,
+         room_id: "placeholder",
+         home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+         hmac_secret: "ha-secret",
+         ha_reconnect_max_ms: 1_000,
+         io_fault_status: io_fault_status,
+         pubsub_registry: pubsub_registry,
+         mailbox_registry: mailbox_registry,
+         mailbox_receipt_store: receipt_store,
+         command_execution_store: command_store,
+         command_observer: self(),
+         transport: ConnectedTransport,
+         name: client_name})
+
+    Process.sleep(100)
+
+    command = signed_command("cmd-restart-dup", "actuator:fan", "on")
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", command,
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 17,
+               ledger_event_hash: String.duplicate("6", 64),
+               decision_event_id: "event-4"
+             )
+
+    assert_receive {:transport_command, _request, %{accepted: true}}, 2_000
+
+    Process.exit(client, :normal)
+    Process.sleep(50)
+
+    restarted_name = Module.concat(__MODULE__, "RestartClientReused#{System.unique_integer([:positive])}")
+
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       command_observer: self(),
+       transport: ConnectedTransport,
+       name: restarted_name})
+
+    Process.sleep(100)
+
+    assert :ok =
+             CommandPublisher.publish("commands:io", command,
+               registry_name: mailbox_registry,
+               receipt_store: receipt_store,
+               ledger_sequence: 18,
+               ledger_event_hash: String.duplicate("7", 64),
+               decision_event_id: "event-4"
+             )
+
+    refute_receive {:transport_command, _request, %{accepted: true}}, 500
+    assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-restart-dup")
   end
 
   defp signed_command(command_id, target, requested_state, opts \\ []) do

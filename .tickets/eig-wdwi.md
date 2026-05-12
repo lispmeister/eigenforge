@@ -1,6 +1,6 @@
 ---
 id: eig-wdwi
-status: open
+status: closed
 deps: [eig-eudn, eig-zohd, eig-dhm1, eig-5906]
 links: []
 created: 2026-05-10T05:07:24Z

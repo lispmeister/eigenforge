@@ -1,6 +1,6 @@
 ---
 id: eig-9w4k
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-11T12:31:52Z

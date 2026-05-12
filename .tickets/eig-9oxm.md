@@ -1,6 +1,6 @@
 ---
 id: eig-9oxm
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-11T12:32:15Z

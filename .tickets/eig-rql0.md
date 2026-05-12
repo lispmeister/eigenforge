@@ -1,6 +1,6 @@
 ---
 id: eig-rql0
-status: open
+status: closed
 deps: [eig-p9ms, eig-q25o, eig-nu0t, eig-23ow, eig-wyul, eig-0ttx, eig-193d, eig-a8hg, eig-glzz, eig-xtqn, eig-i05s, eig-5906, eig-zohd, eig-x020, eig-jtma, eig-5u7f, eig-dhm1, eig-wdwi, eig-tvgt, eig-f5tl, eig-5mvh, eig-7vfe, eig-zp2l, eig-j5tr]
 links: []
 created: 2026-05-10T05:06:35Z
@@ -39,3 +39,7 @@ Aligned remaining V1 implementation epic with SPEC-V1-FIXES-003: added/linked ti
 **2026-05-10T11:27:29Z**
 
 2026-05-10 final coverage check for /goal: reviewed PROTOTYPE-V1-SPEC.md against existing tk graph, confirmed v1 executable scope is covered by eig-rql0 and its direct/indirect blockers; no duplicate tickets created. Verified tk dep cycle and tk ready.
+
+**2026-05-12T08:16:43Z**
+
+2026-05-12 completion audit: verified current V1 implementation against the open v1 ticket set. Green evidence: mix test (all umbrella apps), focused receipt-store recovery tests, OODA restart/timeout tests, Home Assistant adapter/client tests, dashboard read-only/redaction tests, and trace redaction tests. Updated prototype-v1-spec.html to match clarified V1 runtime, mailbox, dashboard-status, and acceptance-matrix behavior before closing audited v1 tickets.

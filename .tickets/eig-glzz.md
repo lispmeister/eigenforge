@@ -1,6 +1,6 @@
 ---
 id: eig-glzz
-status: open
+status: closed
 deps: [eig-bqzy, eig-gu9r]
 links: [eig-xs66, eig-l5tk, eig-5mvh]
 created: 2026-05-09T14:11:40Z

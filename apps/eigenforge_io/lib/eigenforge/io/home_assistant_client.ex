@@ -114,21 +114,32 @@ defmodule Eigenforge.IO.HomeAssistantClient do
   def handle_info(:connect, state) do
     case connect_transport(state) do
       {:ok, conn, initial_states} ->
-        next_state = %{state | conn: conn, connected?: true, reconnect_attempt: 0}
+        next_state = %{state | conn: conn, connected?: true}
 
         case HomeAssistantAdapter.dynamic_validate_entities(initial_states, state.home_assistant.entity_ids) do
           :ok ->
-            _ = record_status(state, "recovered", correlation_id: "ha-connect")
-            _ =
-              publish_snapshot(
-                initial_states,
-                [
-                  snapshot_seq: next_state.last_snapshot_seq + 1,
-                  normalized_at: timestamp(state)
-                ],
-                next_state
-              )
-            {:noreply, %{next_state | physical_control_enabled?: true, last_snapshot_seq: next_state.last_snapshot_seq + 1}}
+            case publish_snapshot(
+                   initial_states,
+                   [
+                     snapshot_seq: next_state.last_snapshot_seq + 1,
+                     normalized_at: timestamp(state)
+                   ],
+                   next_state
+                 ) do
+              :ok ->
+                _ = record_status(next_state, "connection_up", correlation_id: "ha-connect")
+                {:noreply,
+                 %{
+                   next_state
+                   | physical_control_enabled?: true,
+                     reconnect_attempt: 0,
+                     last_snapshot_seq: next_state.last_snapshot_seq + 1
+                 }}
+
+              {:error, reason} ->
+                _ = record_status(state, "degraded", message: inspect(reason), correlation_id: "ha-connect")
+                {:noreply, %{next_state | physical_control_enabled?: false}}
+            end
 
           {:error, errors} ->
             _ = record_status(state, "degraded", message: inspect(errors), correlation_id: "ha-connect")

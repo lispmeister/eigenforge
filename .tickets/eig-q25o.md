@@ -1,6 +1,6 @@
 ---
 id: eig-q25o
-status: open
+status: closed
 deps: [eig-ibl4, eig-tzyb, eig-icur]
 links: []
 created: 2026-05-10T05:06:54Z

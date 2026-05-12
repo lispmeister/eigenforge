@@ -1,6 +1,6 @@
 ---
 id: eig-l5tk
-status: open
+status: closed
 deps: [eig-c2fz, eig-5b1u]
 links: [eig-xs66, eig-glzz, eig-5mvh]
 created: 2026-05-09T14:10:46Z

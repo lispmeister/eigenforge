@@ -10,7 +10,11 @@ defmodule Eigenforge.Core.AfterActionObserverTest do
     assert {:ok, event} =
              AfterActionObserver.interpret_observation(
                command,
-               %{"fan_state" => "off"},
+               %{
+                 "fan_state" => "off",
+                 "source_received_seq" => %{"fan" => 5},
+                 "source_received_monotonic_ms" => %{"fan" => 100}
+               },
                %{
                  observed_state: "on",
                  source_observation_id: "obs-6",
@@ -29,7 +33,11 @@ defmodule Eigenforge.Core.AfterActionObserverTest do
     assert {:ok, event} =
              AfterActionObserver.interpret_observation(
                command,
-               %{"fan_state" => "on"},
+               %{
+                 "fan_state" => "on",
+                 "source_received_seq" => %{"fan" => 5},
+                 "source_received_monotonic_ms" => %{"fan" => 100}
+               },
                %{
                  observed_state: "on",
                  source_observation_id: "obs-6",
@@ -47,7 +55,11 @@ defmodule Eigenforge.Core.AfterActionObserverTest do
     assert {:ok, event} =
              AfterActionObserver.interpret_observation(
                command,
-               %{"fan_state" => "off"},
+               %{
+                 "fan_state" => "off",
+                 "source_received_seq" => %{"fan" => 5},
+                 "source_received_monotonic_ms" => %{"fan" => 100}
+               },
                %{
                  observed_state: "off",
                  source_observation_id: "obs-6",
@@ -65,7 +77,11 @@ defmodule Eigenforge.Core.AfterActionObserverTest do
     assert {:error, :stale_confirmation_evidence} =
              AfterActionObserver.interpret_observation(
                command,
-               %{"fan_state" => "off"},
+               %{
+                 "fan_state" => "off",
+                 "source_received_seq" => %{"fan" => 5},
+                 "source_received_monotonic_ms" => %{"fan" => 100}
+               },
                %{
                  observed_state: "on",
                  source_observation_id: "obs-4",
@@ -79,12 +95,19 @@ defmodule Eigenforge.Core.AfterActionObserverTest do
     command = command_envelope(%{requested_state: "off", snapshot_seq: 2})
 
     assert {:ok, rejected} =
-             AfterActionObserver.interpret_fault(command, %{
-               fault_type: "adapter_rejected",
-               event_id: "fault-3",
-               source_received_seq: 3,
-               reported_at: "2026-05-10T12:00:03.000Z"
-             })
+             AfterActionObserver.interpret_fault(
+               command,
+               %{
+                 fault_type: "adapter_rejected",
+                 event_id: "fault-3",
+                 source_received_seq: 3,
+                 reported_at: "2026-05-10T12:00:03.000Z"
+               },
+               %{
+                 "source_received_seq" => %{"fan" => 2},
+                 "source_received_monotonic_ms" => %{"fan" => 99}
+               }
+             )
 
     assert rejected.status == "adapter_rejected"
     assert AfterActionObserver.terminal_status?(rejected.status)
