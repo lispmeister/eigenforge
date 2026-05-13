@@ -1,3 +1,5 @@
+![Eigenforge logo](docs/images/eigenforge-logo.jpg)
+
 # Eigenforge
 
 Eigenforge is an Elixir/OTP-based reflective control layer for AI-era critical
