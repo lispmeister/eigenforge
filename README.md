@@ -8,6 +8,34 @@ where AI cognition can participate in system operation without bypassing
 explicit authority, policy, durable decision/action records, adapters, or later
 quorum.
 
+## Build And Run
+
+Build from the repository root:
+
+```text
+mix deps.get
+mix compile
+```
+
+Run in simulator mode for local development:
+
+```text
+cp .env.example .env
+mkdir -p var/eigenforge log
+set -a
+source .env
+set +a
+
+mix run --no-start -e 'endpoint_config = Application.get_env(:eigenforge_dashboard, Eigenforge.Dashboard.Endpoint, []); Application.put_env(:eigenforge_dashboard, Eigenforge.Dashboard.Endpoint, Keyword.merge(endpoint_config, http: [ip: {127, 0, 0, 1}, port: 4001], server: true)); {:ok, _} = Application.ensure_all_started(:eigenforge_io); {:ok, _} = Application.ensure_all_started(:eigenforge_dashboard); Process.sleep(:infinity)'
+```
+
+Open `http://localhost:4001` after the process reports that the dashboard is
+running.
+
+Run against Home Assistant by setting `EIGENFORGE_IO_MODE=home_assistant` in
+`.env` and filling in the `HOME_ASSISTANT_*` and `HA_*_ENTITY_ID` values before
+starting the same command.
+
 The repository currently implements the V1 prototype slice described in:
 
 - [PROTOTYPE-V1-SPEC.md](PROTOTYPE-V1-SPEC.md)
