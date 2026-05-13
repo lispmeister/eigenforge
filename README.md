@@ -1,3 +1,8 @@
+![Elixir](https://img.shields.io/badge/Elixir-4B275F?logo=elixir&logoColor=white)
+![OTP](https://img.shields.io/badge/OTP-8A2BE2?logo=erlang&logoColor=white)
+![Build](https://github.com/lispmeister/eigenforge/actions/workflows/ci.yml/badge.svg)
+![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 ![Eigenforge logo](docs/images/eigenforge-logo.jpg)
 
 # Eigenforge
