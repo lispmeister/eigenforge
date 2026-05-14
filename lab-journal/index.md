@@ -9,7 +9,7 @@ sessions, design decisions, experiments, failures, and verification results
 that do not fit cleanly into commit messages.
 
 **Last updated:** 2026-05-14
-**Total entries:** 6
+**Total entries:** 7
 **How to maintain:** Add one chronological row every time a journal file is
 created.
 
@@ -21,6 +21,7 @@ created.
 | 2026-05-10 | [journal-2026-05-10.md](journal-2026-05-10.md) | Clarified Prototype V1 spec ambiguities from SPEC-V1-FIXES-001 and fresh review | Prototype V1 design |
 | 2026-05-12 | [journal-2026-05-12.md](journal-2026-05-12.md) | Completed remaining V1 test-gap tickets and verified the umbrella suite | Prototype V1 implementation |
 | 2026-05-14 | [journal-2026-05-14.md](journal-2026-05-14.md) | Six bug/task tickets: exqlite migration, dual stale-path events, all-room restart recovery, observe/2 snapshot status, core_node_id from opts, interpret_fault nil-default removal | Prototype V1 correctness |
+| 2026-05-14 | [journal-2026-05-14b.md](journal-2026-05-14b.md) | Fresh-eyes review: 7 implementation gaps (trace stale divergence, fan-seq columns, SQL parameterization, non-atomic writes, startup verification, redundant init, cond catch-all) and 3 spec ambiguities (no-op clause, stale payload type, effect_epoch definition); 10 tickets filed | Prototype V1 review |
 
 ## Attachments / Supporting Materials
 

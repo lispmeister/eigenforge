@@ -4,9 +4,32 @@
 
 This project uses the Ticket CLI (`tk`) for task management.
 
-- Always use `tk` commands for creating, updating, and tracking tasks.
-- Never use markdown TODO lists or Beads.
-- Run `tk ready` to see what to work on next.
+- Always use `tk` commands. Never use markdown TODO lists or Beads.
+- Run `tk ready` to list open/in-progress tickets whose dependencies are resolved.
+- Run `tk show <id>` to read a ticket's full description and acceptance criteria before starting work.
+
+### Creating tickets
+
+Title is a **positional argument**, not a flag:
+
+```
+tk create "Title here" -t task -p 1 -a lispmeister \
+  -d "Description" \
+  --acceptance "Acceptance criteria"
+```
+
+Types: `bug` | `feature` | `task` | `epic` | `chore`
+Priority: `0` (highest) → `4` (lowest). P1 = `-p 1`, P2 = `-p 2`, etc.
+
+### Working a ticket
+
+```
+tk start <id>              # mark in_progress when you begin
+tk add-note <id> "text"    # record progress or observations mid-session
+tk close <id>              # mark closed when acceptance criteria are met
+```
+
+Partial ID matching works: `tk show igam` resolves to `eig-igam`.
 
 ## Lab Journal
 
