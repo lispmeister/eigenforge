@@ -10,6 +10,10 @@ control path:
 outside world
   -> IO live observation
   -> core OODA loop
+       -> reasoner (threshold evaluation)
+       -> actuator-state gate (idempotency suppression)
+       -> capability check
+       -> policy decision
   -> consensus/finalization boundary
   -> local core decision ledger
   -> signed command envelope
@@ -62,6 +66,7 @@ Implementation starts with a simulator-backed golden trace vertical slice:
 ```text
 simulator snapshot
   -> core reasoner
+  -> actuator-state gate
   -> capability check
   -> policy decision
   -> finalized decision/action
@@ -128,7 +133,8 @@ private copies of control-message schemas.
 
 - Subscribes to the live IO stream and IO fault/status stream.
 - Validates live input shape, freshness, and decision relevance.
-- Runs the reasoner, capability checks, policy checks, and actuator-state gate.
+- Runs the reasoner, the actuator-state gate (`Core.ActuatorGate`), capability
+  checks, and policy checks, in that order.
 - Finalizes decisions through the configured consensus boundary.
 - Persists finalized decision/action ledger records to the local SQLite ledger.
 - Persists a finalized decision/action record before any command is sent to IO.
@@ -136,7 +142,7 @@ private copies of control-message schemas.
 - Observes IO state/faults after command delivery and records after-action
   events.
 
-`eigenforge_mailbox` is a dumb channel manager.
+`eigenforge_mailbox` is a mechanical delivery journal.
 
 - Accepts, stores, routes, and delivers messages where applicable.
 - Manages channels, topics, lightweight notifications, and supported read
@@ -197,6 +203,60 @@ Network split rule:
 - IO executes at most one command for a finalized decision because command
   envelopes carry idempotency keys and references to finalized ledger events.
 
+### V1 Invariants
+
+These invariants are the authoritative set enforced by `mix eigenforge.ledger.verify`
+and `mix eigenforge.trace.verify`. Failure messages cite invariant IDs.
+
+- **INV-01** *(§9)*: No command envelope is delivered to IO before the corresponding
+  `command_envelope_issued` ledger event is durably committed in the local SQLite
+  ledger.
+- **INV-02** *(§9)*: IO executes at most one adapter action per `idempotency_key`.
+  Duplicate deliveries of the same `idempotency_key` are rejected without adapter
+  execution.
+- **INV-03** *(§9)*: While any command is in-flight for a given `effect_key`, core
+  issues no additional physical command for the same room, target, action, and
+  requested state.
+- **INV-04** *(§6.4)*: A given `snapshot_id` is processed at most once per core node.
+  Replayed or duplicate PubSub deliveries with the same `snapshot_id` are ignored
+  after the first completed or in-flight decision attempt.
+- **INV-05** *(§7)*: A stale/deny decision for a given `(snapshot_id, correlation_id)`
+  pair is recorded exactly once. No second component may independently write a
+  duplicate `stale_snapshot_denied` event for the same pair.
+- **INV-06** *(§10)*: After-action terminal status (`confirmed_changed`,
+  `confirmed_already_in_state`, `adapter_rejected`, `adapter_failed`,
+  `state_mismatch`, `timed_out`) is authored only by core, not by IO or mailbox.
+- **INV-07** *(§11)*: The local ledger is append-only. No ledger row is updated,
+  deleted, replaced, resequenced, or backfilled by runtime code. Only plain
+  `INSERT` is permitted on `ledger_events`.
+- **INV-08** *(§11)*: `sequence` values are contiguous, monotonically increasing,
+  and node-local. Two events from the same node may not share a sequence number.
+  Sequence numbers from different nodes must not be compared as global order.
+- **INV-09** *(§11)*: `previous_event_hash` for sequence `N+1` equals the
+  `event_hash` of sequence `N`. The genesis event (`sequence=1`) uses
+  `previous_event_hash=eigenforge-ledger-genesis-v1`.
+- **INV-10** *(§11)*: Every HMAC signature is verified using the correct purpose label
+  (e.g., `eigenforge:v1:ledger_event`). Signatures produced with the wrong label
+  are rejected.
+- **INV-11** *(§11)*: Every decision-chain ledger event (`reasoner_outcome_recorded`,
+  `capability_check_recorded`, `policy_decision_recorded`,
+  `command_envelope_issued`, `after_action_recorded`, `stale_snapshot_denied`)
+  carries a non-null `consensus_decision_id` and
+  `consensus_status=single_core_finalized` in V1.
+- **INV-12** *(§4)*: Secrets (`EIGENFORGE_HMAC_SECRET`, `HOME_ASSISTANT_TOKEN`, and
+  any value loaded from a variable whose name contains `TOKEN`, `SECRET`,
+  `PASSWORD`, or `KEY`) never appear in canonical payloads, golden traces, IO
+  debug logs, dashboard output, test failure messages, or exception text. The
+  redaction string is `[REDACTED]`.
+- **INV-13** *(§4)*: Startup fails when any ledger payload, runtime config,
+  signature sidecar, simulator fixture, or generated contract declares an
+  unsupported `schema_id`, `schema_version`, or `format_version`.
+- **INV-14** *(§9)*: Actuator observations can confirm or contradict a command only
+  when IO-local receive ordering proves they arrived after command delivery
+  (`source_received_seq.fan` or `source_received_monotonic_ms.fan` is greater
+  than the value captured at delivery). Source wall-clock timestamps alone do not
+  constitute proof of post-delivery ordering.
+
 ### Suggested OTP Process Layout
 
 Names are implementation guides, not mandatory module names:
@@ -229,6 +289,7 @@ eigenforge_core
   Core.SnapshotSubscriber
   Core.FaultStatusSubscriber
   Core.Reasoner
+  Core.ActuatorGate
   Core.CapabilityChecker
   Core.PolicyEngine
   Core.CommandIssuer
@@ -238,6 +299,7 @@ eigenforge_mailbox
   Mailbox.Supervisor
   Mailbox.ChannelManager
   Mailbox.CommandPublisher
+  Mailbox.CommandTransport (behaviour; PubSubTransport is the V1 impl)
   Mailbox.LedgerNotifier
   Mailbox.Projections
 
@@ -423,6 +485,33 @@ This secret signs:
 
 Key separation is deferred.
 
+### V1 Threat Model
+
+V1's signing, hashing, and redaction machinery defends against three
+specific threats:
+
+1. **Offline ledger tampering.** A signed, hash-chained ledger is detectable
+   as modified if an attacker edits rows after the fact. `mix
+   eigenforge.ledger.verify` catches breaks in the hash chain and invalid HMAC
+   signatures.
+
+2. **External audit without process trust.** A human auditor who does not
+   trust the authoring process can independently recompute hashes and verify
+   signatures using the shared HMAC secret (provided separately), confirming
+   that ledger events were produced by a process holding that secret.
+
+3. **Accidental credential leakage.** `EIGENFORGE_HMAC_SECRET`,
+   `HOME_ASSISTANT_TOKEN`, and any variable whose name contains `TOKEN`,
+   `SECRET`, `PASSWORD`, or `KEY` are redacted to `[REDACTED]` before
+   appearing in canonical payloads, golden traces, IO debug logs, dashboard
+   output, test failure messages, or exception text.
+
+V1 does **not** defend against compromise of the process that holds
+`EIGENFORGE_HMAC_SECRET` in memory. A compromised core process can forge
+valid signatures and produce a plausible-but-fraudulent ledger. Key
+separation, process isolation, hardware security modules, and asymmetric
+cryptography are explicitly V2/V3 work (see §14).
+
 ### Contract Payload Authority Classes
 
 Every contract payload, signed or unsigned, must include:
@@ -472,6 +561,18 @@ runtime config, signature sidecars, simulator fixtures, or generated contracts
 declare an unsupported `schema_id`, `schema_version`, or `format_version`.
 Forward/backward migrations require an explicit later migration tool and are
 not attempted automatically.
+
+A no-op migration tool stub reserves the migration interface and makes
+accidental schema drift fail loudly:
+
+```text
+mix eigenforge.ledger.migrate --from 1 --to 1
+```
+
+In V1, this task asserts that every ledger payload has `schema_version=1` and
+exits 0. For any other `--to` value it exits non-zero with a clear
+`no V1→VN migration defined` message. Do not use schema workarounds that
+bypass this check; add a real migration task instead.
 
 The prose contract and checked-in schemas must agree. When they conflict, fix
 the schema and generated module in the same ticket that changes the prose, or
@@ -622,6 +723,17 @@ to the ledger tail, recovery must choose the conservative no-new-command path:
 mark affected commands pending or timed out according to the durable deadlines,
 and do not issue equivalent physical work until recovery records a terminal
 after-action.
+
+**Wall-clock skew recovery footgun.** The conservative path means that if the
+system clock is adjusted backward by more than the remaining time on a pending
+command's `expires_at` deadline at the moment of restart, recovery will mark
+that command `timed_out` even if the command physically succeeded before the
+restart. This is safe by design — an erroneous `timed_out` is less dangerous
+than a duplicate command — but operators must be aware of it. Do not restart
+the system during a known NTP correction or clock change that moves the clock
+backward by more than a few seconds. A future `clock_skew_observed` ledger
+event and explicit operator acknowledgment path could mitigate this; that work
+is deferred to V2.
 
 Secrets and credentials must never appear in canonical payloads, golden traces,
 IO debug logs, dashboard output, test failure messages, or exception text. V1
@@ -923,7 +1035,10 @@ Decision relevance:
   command may be issued; core records a stale/deny/no-command path.
 - Humidity and temperature are observe-only in V1. Their stale, missing,
   malformed, unavailable, or unknown status is shown as dashboard/fault context
-  but does not itself deny fan action.
+  but does not itself deny fan action. These fields are present in V1 for
+  dashboard realism and to exercise multi-source freshness plumbing; they carry
+  no control authority and may be removed in a V1.x simplification if the
+  contract surface needs reducing.
 - Fan state stale or unknown still permits fan on/off commands because the fan
   actuator is idempotent. Non-idempotent actuators must not receive blind
   commands.
@@ -971,11 +1086,24 @@ append a new decision-chain ledger event unless one of these is true:
 - the system has restarted and recovery rules require recording a follow-up
   event.
 
-Golden trace mode processes every fixture in order. Runtime mode coalesces
-repeated nominal/no-threshold snapshots by `snapshot_hash`; it records the first
-nominal no-command decision after startup or after a transition from stale,
-threshold-breached, degraded, or command-pending state, but it does not append
-unbounded identical nominal no-action decisions.
+Golden trace mode processes every fixture in order.
+
+Runtime mode coalesces repeated nominal/no-threshold snapshots. It records a
+new `reasoner_outcome_recorded` / `policy_decision_recorded` pair for a nominal
+snapshot if and only if at least one of the following fields in
+`latest_room_control_state` differs from the values recorded for the previous
+committed decision for that room:
+
+- `fan_state`
+- `source_status.co2` (as stored in the projection)
+- top-level `freshness`
+- `pending_command_id` (non-null means a command is in flight)
+- `connection_status`
+
+If none of those fields differ, the nominal snapshot updates live projections
+but does not append a new decision-chain ledger event. This predicate is
+machine-checkable from projection state and avoids unbounded identical
+no-action ledger growth.
 
 ### IO Fault/Status Stream
 
@@ -1077,22 +1205,34 @@ reasoner outcome. V1 ships a deterministic rules reasoner; later versions can
 add LLM reasoners without changing IO, policy, command envelope, or ledger
 boundaries.
 
-For V1, the deterministic rules reasoner owns both CO2 threshold evaluation and
-the idempotent fan "already in desired state" no-action outcome. Core owns
-contract validation, event sequencing, capability checks, policy checks,
-persistence, command issuance, and after-action observation. The actuator-state
-gate described below is implemented as part of the deterministic rules
-reasoner behavior for the fan rule, not as a second component that can rewrite
-reasoner outcomes.
+For V1, the deterministic rules reasoner owns CO2 threshold evaluation only.
+It receives a normalized snapshot and returns a threshold-based outcome
+(`propose_action`, `no_threshold_event`, or `insufficient_fresh_data`) without
+consulting the current actuator state. Actuator-state suppression — the
+"already in desired state" check — is the responsibility of the fixed
+`Core.ActuatorGate` stage that immediately follows the reasoner (see
+§7 Actuator-State Gate below).
 
-Reasoner outcome types:
+This separation means any future reasoner (including LLM-backed reasoners)
+produces raw threshold proposals; the gate applies the universal idempotency
+suppression invariant without requiring each reasoner to reimplement it.
+Core owns contract validation, event sequencing, capability checks, policy
+checks, persistence, command issuance, and after-action observation.
+
+Reasoner outcome types recorded in `reasoner_outcome_recorded` ledger events:
 
 ```text
-propose_action
-propose_no_action
-no_threshold_event
-insufficient_fresh_data
+propose_action          -- reasoner: CO2 threshold breached; no actuator-state check
+propose_no_action       -- gate: threshold breached but actuator already in requested state
+no_threshold_event      -- reasoner: CO2 within nominal range
+insufficient_fresh_data -- reasoner: CO2 stale, missing, or malformed
 ```
+
+The reasoner module itself only produces `propose_action`, `no_threshold_event`,
+and `insufficient_fresh_data`. `Core.ActuatorGate` observes the raw reasoner
+result and, when `propose_action` would be redundant (fan already in the
+requested state for idempotent actuators), rewrites it to `propose_no_action`
+before the outcome is recorded or passed to capability checking.
 
 Reasoner output must include:
 
@@ -1120,39 +1260,39 @@ confidence_bps
 floating-point confidence values in signed payloads. For deterministic V1
 rules, `confidence_bps` may be `10000`.
 
-Example reasons:
+Example reasons (attribute to the stage that emits them):
 
 ```text
-CO2 1240 ppm exceeds 1000 ppm threshold; propose vent fan ON.
-Threshold reached but no action due to CO2 fan actuator already in state ON.
-Threshold reached but no action due to CO2 fan actuator already in state OFF.
+[reasoner] CO2 1240 ppm exceeds 1000 ppm threshold; propose vent fan ON.
+[gate]     Threshold breach suppressed; fan actuator already in requested state ON.
+[gate]     Threshold breach suppressed; fan actuator already in requested state OFF.
 ```
 
 ### Actuator-State Gate
 
-The actuator-state gate is inside the core OODA loop and, for the V1 rules
-reasoner, is evaluated by the reasoner behavior.
+`Core.ActuatorGate` is a fixed stage in the core OODA loop, positioned between
+the reasoner and capability checking. It is not part of the reasoner behavior;
+all reasoners pass through it.
 
-After the rules reasoner observes a CO2 threshold breach, it evaluates the
-latest fan state from the normalized snapshot before proposing a physical
-command.
+When the reasoner returns `propose_action`, the gate evaluates the latest
+actuator state from the normalized snapshot:
 
-If threshold is breached but the fan is already in the requested state, core
-records a no-action reasoner outcome:
+- If the fan is already in the requested state (fan state known and matches),
+  the gate rewrites the outcome to `propose_no_action` with reason:
+  `Threshold breach suppressed; fan actuator already in requested state ON/OFF.`
+  Capability checking is skipped and no command envelope is issued.
+- If fan state is unknown, stale, or `not_yet_observed` and CO2 requires
+  action, the gate passes `propose_action` through unchanged because fan on/off
+  is idempotent. Non-idempotent actuators must not receive blind commands;
+  for those, unknown or stale state causes the gate to emit `propose_no_action`
+  with reason `denied_unknown_non_idempotent_actuator_state`.
 
-```text
-Threshold reached but no action due to CO2 fan actuator already in state ON.
-Threshold reached but no action due to CO2 fan actuator already in state OFF.
-```
+Actuator idempotency comes from the device inventory config field `idempotent`.
 
 This no-action rule applies symmetrically to fan-on and fan-off. In V2, core
-nodes vote on this normalized no-action outcome the same way they vote on a
-physical action. V1 records the same normalized outcome shape.
-
-If fan state is unknown or stale and CO2 requires action, core may still send
-the fan command because fan on/off is idempotent. Non-idempotent actuators must
-not receive blind commands. Actuator idempotency comes from device inventory
-config.
+nodes vote on the gate's normalized `propose_no_action` outcome the same way
+they vote on a physical action. V1 records the same normalized outcome shape in
+`reasoner_outcome_recorded` ledger events.
 
 ### Timing Defaults
 
@@ -1171,10 +1311,11 @@ The stale CO2 path has exactly one ownership sequence:
 
 1. IO publishes a contract-valid safety snapshot when possible.
 2. Core validates shape and calls the reasoner.
-3. The reasoner records `outcome_type=insufficient_fresh_data`.
-4. Capability checking is skipped because no physical action is proposed.
-5. Policy records `decision=deny_stale_snapshot`.
-6. Core persists the required stale/no-command events and sends no command
+3. The reasoner returns `outcome_type=insufficient_fresh_data`.
+4. `Core.ActuatorGate` is skipped because no `propose_action` was returned.
+5. Capability checking is skipped because no physical action is proposed.
+6. Policy records `decision=deny_stale_snapshot`.
+7. Core persists the required stale/no-command events and sends no command
    envelope.
 
 No other component may independently write a second stale-deny decision for the
@@ -1433,18 +1574,42 @@ transaction. V2 requires each quorum participant to persist the finalized
 decision to its own SQLite ledger; a finalizer must not issue the command until
 its own local commit succeeds.
 
-Command delivery to IO uses Phoenix PubSub through the mailbox boundary after
-local ledger commit. The mailbox publishes to an explicit command topic such
-as:
+Command delivery to IO goes through the mailbox boundary after local ledger
+commit. The delivery channel is abstracted behind a `Mailbox.CommandTransport`
+behaviour:
+
+```elixir
+@callback publish_command(envelope :: map(), receipt :: map(), opts :: keyword()) ::
+  {:ok, delivery_evidence :: map()} | {:error, reason :: term()}
+```
+
+V1 ships `Mailbox.PubSubTransport` as the implementation, publishing to an
+explicit command topic:
 
 ```text
 commands:io
 ```
 
+Transport guarantees assumed by the spec: best-effort delivery within a single
+BEAM node; no broker durability; no guaranteed ordering across restarts. The
+receipt store, phase tracking, and redelivery logic (described below) supply the
+durability and recovery guarantees that the transport itself does not provide. A
+future implementation may replace `PubSubTransport` with a direct `GenServer`
+call or an Oban-backed queue without changing the mailbox boundary contract.
+
 The mailbox may read the command identifiers required to route the envelope and
 create the delivery receipt. It must not validate signatures, evaluate policy,
 authorize execution, change payload fields, enrich command semantics, or mutate
 the command envelope.
+
+**Receipt store evaluation note (eig-defb).** Mailbox currently owns a second
+SQLite persistence boundary: a signed manifest, a phase-tracked delivery receipt
+store, restart recovery, and projection rebuild. An alternative is to emit
+`delivery_receipt_recorded` ledger events through the core ledger writer,
+collapsing to one persistence boundary. The trade-off is tighter mailbox–core
+coupling and implications for V2 multi-core delivery routing. This design
+question is under evaluation; the chosen approach will be reflected in a spec
+update and implementation ticket before mailbox storage grows further.
 
 After the corresponding ledger event is committed, the mailbox attaches a
 signed delivery receipt to command delivery. The receipt is mechanical delivery
@@ -2030,12 +2195,19 @@ The task should:
 3. Recompute each event hash.
 4. Verify each `previous_event_hash` link.
 5. Verify each HMAC signature.
-6. Verify finalized action events have the expected V1/V2 consensus status.
+6. Verify decision-chain events carry `consensus_status=single_core_finalized`
+   in V1. Events with `consensus_status=quorum_finalized` or other unrecognized
+   values are accepted as structurally valid (hash chain and HMAC still verified)
+   but emit a warning:
+   `unsupported_consensus_status: <value> (V1 single-core only)`.
+   This allows the forward-compat fixture in `test/golden_traces/v2_quorum_shape_compat.json`
+   to pass without silently concealing the mismatch.
 7. Verify local sequence numbers are contiguous and node-local.
 8. Verify catch-up events append to the local chain instead of reusing foreign
    sequence numbers or foreign event hashes as local event hashes.
 9. Report the first broken sequence, hash, signature, append-only, or
-   consensus reference.
+   consensus reference. Cite the relevant invariant ID (INV-01 through INV-14)
+   in each error message.
 
 ## 12. Dashboard
 
@@ -2091,8 +2263,8 @@ must be visible without implying that the dashboard can authorize control.
 
 V1 needs a core logic test rig independent of Home Assistant, simulator
 clients, and external IO. It feeds normalized snapshot fixtures directly into
-the reasoner, capability, policy, command issuance, and after-action
-interpretation path.
+the reasoner, `Core.ActuatorGate`, capability, policy, command issuance, and
+after-action interpretation path.
 
 Initial coverage:
 
@@ -2149,7 +2321,8 @@ produce the complete expected V1 chain without depending on Home Assistant:
 
 ```text
 normalized snapshot
-  -> reasoner outcome
+  -> reasoner outcome (threshold evaluation only)
+  -> actuator-state gate (idempotency suppression)
   -> capability result
   -> policy decision
   -> finalized decision/action
@@ -2252,10 +2425,11 @@ after-action: confirmed_changed observed_state=on
 
 ```text
 snapshot: co2_ppm=1200, fan_state=on, freshness=fresh
-reasoner outcome: propose_no_action
-policy decision: no_command with capability_status=not_checked
-ledger: finalized no-action decision recorded locally
-IO command: not delivered
+reasoner (raw):      propose_action fan on  [threshold only; no actuator-state check]
+actuator-state gate: propose_no_action      [fan already in requested state ON]
+policy decision:     no_command with capability_status=not_checked
+ledger:              reasoner_outcome_recorded (propose_no_action), policy_decision_recorded
+IO command:          not delivered
 ```
 
 3. Stale CO2 denies action.
@@ -2278,6 +2452,47 @@ ledger: persistence attempted three times
 result: {:error, :ledger_persistence_failed}
 IO command: not delivered
 ```
+
+### V2-Shape Forward-Compat Golden Trace Fixture
+
+The V1 field shapes (`consensus_decision_id`, `consensus_status`, `quorum_ref`,
+and supporting vote references) are promised to leave V2 migration
+straightforward. To verify this promise rather than merely assert it, commit a
+hand-built fixture:
+
+```text
+test/golden_traces/v2_quorum_shape_compat.json
+```
+
+This fixture contains a `command_envelope_issued` ledger event with
+`consensus_status="quorum_finalized"`, non-empty `quorum_ref`, and supporting
+vote references. `mix eigenforge.ledger.verify` must produce a deterministic
+and documented outcome on this fixture. V1 behavior:
+
+- Accept the shape with a logged warning: `unsupported_consensus_status:
+  quorum_finalized (V1 single-core only)`, and report the chain as
+  structurally valid but carrying an unrecognized consensus status.
+
+Do not silently accept the shape without the warning. V2 code will remove the
+warning when quorum evidence verification is implemented.
+
+### V1 Acceptance Demo Script
+
+Commit `docs/v1-demo.md` as a reproducible 5–10 minute walkthrough:
+
+```text
+1. mix eigenforge.ledger.genesis     (initialize a clean ledger)
+2. iex -S mix                        (start umbrella in EIGENFORGE_IO_MODE=simulator)
+3. Trigger co2_high_fan_off fixture  (observe fan-on chain in dashboard)
+4. Inspect ledger event chain and issued command envelope
+5. mix eigenforge.ledger.verify      (expect: chain valid, all invariants pass)
+6. Trigger co2_stale_fan_off fixture (observe stale-deny chain and no command)
+7. Trigger co2_high_fan_on fixture   (observe propose_no_action chain, gate active)
+```
+
+All seven steps must produce the documented output from a fresh checkout
+without manual configuration beyond copying `.env.example`. A passing demo
+script defines "essence captured" for V1.
 
 ### V1 Fault-Injection Mini-Slice
 
