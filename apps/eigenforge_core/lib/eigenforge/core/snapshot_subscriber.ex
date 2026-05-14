@@ -44,6 +44,7 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     room_id = Keyword.fetch!(opts, :room_id)
     pubsub_registry = Keyword.get(opts, :pubsub_registry, Eigenforge.Core.PubSub.Registry)
     :ok = subscribe(room_id, pubsub_registry)
+
     io_fault_status_registry =
       Keyword.get(opts, :io_fault_status_registry, Eigenforge.Core.IoFaultStatus.Registry)
 
@@ -52,7 +53,8 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     state = %{
       room_id: room_id,
       mailbox_registry: Keyword.get(opts, :mailbox_registry, Eigenforge.Mailbox.Registry),
-      mailbox_receipt_store: Keyword.get(opts, :mailbox_receipt_store, Eigenforge.Mailbox.ReceiptStore),
+      mailbox_receipt_store:
+        Keyword.get(opts, :mailbox_receipt_store, Eigenforge.Mailbox.ReceiptStore),
       writer: Keyword.get(opts, :writer, LedgerWriter),
       db_path: Keyword.get(opts, :db_path),
       io_mode: Keyword.get(opts, :io_mode, "simulator"),
@@ -60,7 +62,9 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
       reasoner_module: Keyword.get(opts, :reasoner_module, Co2Rules),
       after_action_observer: Keyword.get(opts, :after_action_observer, AfterActionObserver),
       utc_now: Keyword.get(opts, :utc_now, &DateTime.utc_now/0),
-      monotonic_now_ms: Keyword.get(opts, :monotonic_now_ms, fn -> System.monotonic_time(:millisecond) end),
+      monotonic_now_ms:
+        Keyword.get(opts, :monotonic_now_ms, fn -> System.monotonic_time(:millisecond) end),
+      core_node_id: Keyword.get(opts, :core_node_id, "core_a"),
       secret: Keyword.fetch!(opts, :secret),
       processed_snapshot_ids: MapSet.new(),
       pending_commands: %{}
@@ -88,10 +92,14 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
             else
               case run_pipeline(snapshot, state) do
                 {:ok, next_state} ->
-                  %{next_state | processed_snapshot_ids: MapSet.put(next_state.processed_snapshot_ids, snapshot.snapshot_id)}
+                  %{
+                    next_state
+                    | processed_snapshot_ids:
+                        MapSet.put(next_state.processed_snapshot_ids, snapshot.snapshot_id)
+                  }
 
                 _ ->
-                  %{state | processed_snapshot_ids: MapSet.put(state.processed_snapshot_ids, snapshot.snapshot_id)}
+                  state
               end
             end
 
@@ -123,6 +131,7 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
          {:ok, policy} <- PolicyEngine.decide(reasoner, capability, snapshot),
          {:ok, command} <-
            CommandIssuer.issue(reasoner, capability, policy, snapshot, state.secret,
+             core_node_id: state.core_node_id,
              consensus_decision_id: refs.consensus_decision_id,
              decision_event_id: refs.command_event_id,
              reasoner_outcome_event_id: refs.reasoner_event_id,
@@ -194,11 +203,46 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
       }
 
       case LedgerWriter.append(state.writer, attrs) do
-        {:ok, event} -> {:cont, {:ok, Map.put(acc, event_type, event)}}
-        {:error, reason} -> {:halt, {:error, reason}}
+        {:ok, event} ->
+          acc = Map.put(acc, event_type, event)
+
+          case append_stale_deny(payload, refs, state) do
+            {:ok, nil} ->
+              {:cont, {:ok, acc}}
+
+            {:ok, stale_event} ->
+              {:cont, {:ok, Map.put(acc, "stale_snapshot_denied", stale_event)}}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
       end
     end)
   end
+
+  defp append_stale_deny(
+         %Eigenforge.Contracts.PolicyDecision{decision: "deny_stale_snapshot"} = policy,
+         refs,
+         state
+       ) do
+    attrs = %{
+      event_id: refs.stale_deny_event_id,
+      event_type: "stale_snapshot_denied",
+      payload: policy,
+      subject: "core_rule_stub",
+      source_app: "eigenforge_core",
+      consensus_decision_id: refs.consensus_decision_id,
+      consensus_status: "single_core_finalized",
+      correlation_id: refs.correlation_id
+    }
+
+    LedgerWriter.append(state.writer, attrs)
+  end
+
+  defp append_stale_deny(_payload, _refs, _state), do: {:ok, nil}
 
   defp normalize_snapshot(%NormalizedSnapshot{} = snapshot), do: {:ok, snapshot}
 
@@ -217,16 +261,26 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   defp maybe_resolve_pending_from_snapshot(snapshot, state) do
     Enum.reduce(state.pending_commands, state, fn {command_id, pending}, acc ->
       if pending.command.target == "actuator:fan" and post_delivery_snapshot?(snapshot, pending) do
-        case acc.after_action_observer.interpret_observation(pending.command, pending.pre_command_snapshot, %{
-               observed_state: snapshot.fan_state,
-               source_observation_id: get_in(snapshot.source_observation_ids, ["fan"]) || get_in(snapshot.source_observation_ids, [:fan]),
-               source_received_seq: get_in(snapshot.source_received_seq, ["fan"]) || get_in(snapshot.source_received_seq, [:fan]),
-               source_received_monotonic_ms:
-                 get_in(snapshot.source_received_monotonic_ms, ["fan"]) || get_in(snapshot.source_received_monotonic_ms, [:fan]),
-               reported_at: snapshot.normalized_at
-             }) do
+        case acc.after_action_observer.interpret_observation(
+               pending.command,
+               pending.pre_command_snapshot,
+               %{
+                 observed_state: snapshot.fan_state,
+                 source_observation_id:
+                   get_in(snapshot.source_observation_ids, ["fan"]) ||
+                     get_in(snapshot.source_observation_ids, [:fan]),
+                 source_received_seq:
+                   get_in(snapshot.source_received_seq, ["fan"]) ||
+                     get_in(snapshot.source_received_seq, [:fan]),
+                 source_received_monotonic_ms:
+                   get_in(snapshot.source_received_monotonic_ms, ["fan"]) ||
+                     get_in(snapshot.source_received_monotonic_ms, [:fan]),
+                 reported_at: snapshot.normalized_at
+               }
+             ) do
           {:ok, after_action} ->
             refs = pending.refs
+
             case append_payloads([after_action], snapshot, refs, acc) do
               {:ok, _appended_events} -> drop_pending_command(acc, command_id)
               {:error, _reason} -> acc
@@ -244,17 +298,22 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   defp maybe_resolve_pending_from_fault(event, state) do
     Enum.reduce(state.pending_commands, state, fn {command_id, pending}, acc ->
       if event.room_id == acc.room_id do
-        case acc.after_action_observer.interpret_fault(pending.command, %{
-               fault_type: event.fault_type,
-               event_id: event.event_id,
-               source_received_seq: get_in(event.metadata || %{}, ["source_received_seq"]),
-               source_received_monotonic_ms:
-                 get_in(event.metadata || %{}, ["source_received_monotonic_ms"]),
-               reported_at: event.observed_at
-             }, pending.pre_command_snapshot) do
+        case acc.after_action_observer.interpret_fault(
+               pending.command,
+               %{
+                 fault_type: event.fault_type,
+                 event_id: event.event_id,
+                 source_received_seq: get_in(event.metadata || %{}, ["source_received_seq"]),
+                 source_received_monotonic_ms:
+                   get_in(event.metadata || %{}, ["source_received_monotonic_ms"]),
+                 reported_at: event.observed_at
+               },
+               pending.pre_command_snapshot
+             ) do
           {:ok, after_action} ->
             refs = pending.refs
             synthetic_snapshot = pending.pre_command_snapshot
+
             case append_payloads([after_action], synthetic_snapshot, refs, acc) do
               {:ok, _appended_events} -> drop_pending_command(acc, command_id)
               {:error, _reason} -> acc
@@ -297,21 +356,26 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   end
 
   defp post_delivery_snapshot?(snapshot, pending) do
-    current_seq = get_in(snapshot.source_received_seq, ["fan"]) || get_in(snapshot.source_received_seq, [:fan])
+    current_seq =
+      get_in(snapshot.source_received_seq, ["fan"]) ||
+        get_in(snapshot.source_received_seq, [:fan])
+
     pending_seq =
       pending.pre_command_snapshot
       |> Map.get("source_received_seq", %{})
       |> Map.get("fan")
 
-    current_ms = get_in(snapshot.source_received_monotonic_ms, ["fan"]) || get_in(snapshot.source_received_monotonic_ms, [:fan])
+    current_ms =
+      get_in(snapshot.source_received_monotonic_ms, ["fan"]) ||
+        get_in(snapshot.source_received_monotonic_ms, [:fan])
 
     pending_ms =
       pending.pre_command_snapshot
       |> Map.get("source_received_monotonic_ms", %{})
       |> Map.get("fan")
 
-    is_integer(current_seq) and is_integer(pending_seq) and current_seq > pending_seq or
-      is_integer(current_ms) and is_integer(pending_ms) and current_ms > pending_ms
+    (is_integer(current_seq) and is_integer(pending_seq) and current_seq > pending_seq) or
+      (is_integer(current_ms) and is_integer(pending_ms) and current_ms > pending_ms)
   end
 
   defp maybe_timeout_pending_command(command_id, state) do
@@ -325,7 +389,12 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
                reported_at: pending.command.expires_at
              ) do
           {:ok, after_action} ->
-            case append_payloads([after_action], pending.pre_command_snapshot, pending.refs, state) do
+            case append_payloads(
+                   [after_action],
+                   pending.pre_command_snapshot,
+                   pending.refs,
+                   state
+                 ) do
               {:ok, _appended_events} -> drop_pending_command(state, command_id)
               {:error, _reason} -> state
             end
@@ -339,28 +408,47 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   defp recover_pending_commands(%{db_path: nil} = state), do: state
 
   defp recover_pending_commands(state) do
-    case recoverable_pending_command(state) do
-      {:ok, nil} ->
-        state
+    case fetch_all_pending_room_states(state) do
+      {:ok, room_states} ->
+        Enum.reduce(room_states, state, fn room_state, acc ->
+          case build_pending_entry(room_state, acc) do
+            {:ok, pending} ->
+              timeout_ms = recovered_timeout_ms(pending, acc)
 
-      {:ok, pending} ->
-        timeout_ms = recovered_timeout_ms(pending, state)
+              if expired?(pending.command.expires_at, acc) or timeout_ms == 0 do
+                maybe_record_recovery_timeout(acc, pending)
+              else
+                register_recovered_pending_command(acc, pending, timeout_ms)
+              end
 
-        if expired?(pending.command.expires_at, state) or timeout_ms == 0 do
-          maybe_record_recovery_timeout(state, pending)
-        else
-          register_recovered_pending_command(state, pending, timeout_ms)
-        end
+            {:error, _reason} ->
+              acc
+          end
+        end)
 
       {:error, _reason} ->
         state
     end
   end
 
-  defp recoverable_pending_command(state) do
-    with {:ok, room_state} <- fetch_room_state(state),
-         command_id when is_binary(command_id) <- room_state["pending_command_id"],
-         {:ok, command} <- fetch_command(command_id, state.db_path),
+  defp fetch_all_pending_room_states(%{db_path: db_path}) do
+    sql = """
+    SELECT *
+    FROM latest_room_control_state
+    WHERE pending_command_id IS NOT NULL
+      AND pending_command_id != '';
+    """
+
+    case LedgerProjections.query_json(db_path, sql) do
+      {:ok, rows} -> {:ok, rows}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp build_pending_entry(room_state, state) do
+    command_id = room_state["pending_command_id"]
+
+    with {:ok, command} <- fetch_command(command_id, state.db_path),
          {:ok, receipts} <-
            Eigenforge.Mailbox.ReceiptStore.entries_for_command(
              state.mailbox_receipt_store,
@@ -373,12 +461,6 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
          refs: event_refs_from_command(command),
          receipt_entry: latest_receipt_entry(receipts)
        }}
-    else
-      {:ok, _room_state} -> {:ok, nil}
-      nil -> {:ok, nil}
-      false -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
-      _ -> {:ok, nil}
     end
   end
 
@@ -434,7 +516,11 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
       )
 
     pending = Map.put(pending, :timer_ref, timer_ref)
-    %{state | pending_commands: Map.put(state.pending_commands, pending.command.command_id, pending)}
+
+    %{
+      state
+      | pending_commands: Map.put(state.pending_commands, pending.command.command_id, pending)
+    }
   end
 
   defp maybe_record_recovery_timeout(state, pending) do
@@ -505,7 +591,9 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
       "source_entity_ids" => %{},
       "source_observation_ids" => %{},
       "source_observed_at" => %{},
-      "source_received_seq" => %{"fan" => room_state["source_received_seq_fan"] || command.snapshot_seq},
+      "source_received_seq" => %{
+        "fan" => room_state["source_received_seq_fan"] || command.snapshot_seq
+      },
       "source_received_monotonic_ms" => %{"fan" => room_state["source_received_monotonic_ms_fan"]},
       "source_status" => %{},
       "normalized_at" => room_state["updated_at"] || command.issued_at,
@@ -518,7 +606,8 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   end
 
   defp resolved_effect_epoch(snapshot, state) do
-    case Map.get(snapshot.source_observation_ids, "fan") || Map.get(snapshot.source_observation_ids, :fan) do
+    case Map.get(snapshot.source_observation_ids, "fan") ||
+           Map.get(snapshot.source_observation_ids, :fan) do
       value when is_binary(value) and value != "" ->
         value
 
@@ -534,7 +623,8 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   end
 
   defp effect_epoch(snapshot) do
-    case Map.get(snapshot.source_observation_ids, "fan") || Map.get(snapshot.source_observation_ids, :fan) do
+    case Map.get(snapshot.source_observation_ids, "fan") ||
+           Map.get(snapshot.source_observation_ids, :fan) do
       value when is_binary(value) and value != "" -> value
       _ -> "startup"
     end
@@ -555,7 +645,10 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
           entry
 
         best_entry ->
-          if DateTime.compare(latest_receipt_timestamp(entry), latest_receipt_timestamp(best_entry)) == :gt do
+          if DateTime.compare(
+               latest_receipt_timestamp(entry),
+               latest_receipt_timestamp(best_entry)
+             ) == :gt do
             entry
           else
             best_entry
@@ -644,9 +737,6 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   defp current_utc(state), do: state.utc_now.()
   defp current_monotonic_ms(state), do: state.monotonic_now_ms.()
 
-  defp event_type(%Eigenforge.Contracts.PolicyDecision{decision: "deny_stale_snapshot"}),
-    do: "stale_snapshot_denied"
-
   defp event_type(%module{}) do
     cond do
       module == Eigenforge.Contracts.ReasonerOutcome -> "reasoner_outcome_recorded"
@@ -673,12 +763,18 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
 
   defp event_refs(snapshot) do
     %{
-      reasoner_event_id: TraceIdentity.stable_id("event", ["reasoner_outcome_recorded", snapshot.snapshot_id]),
-      capability_event_id: TraceIdentity.stable_id("event", ["capability_check_recorded", snapshot.snapshot_id]),
-      policy_event_id: TraceIdentity.stable_id("event", ["policy_decision_recorded", snapshot.snapshot_id]),
-      stale_deny_event_id: TraceIdentity.stable_id("event", ["stale_snapshot_denied", snapshot.snapshot_id]),
-      command_event_id: TraceIdentity.stable_id("event", ["command_envelope_issued", snapshot.snapshot_id]),
-      after_action_event_id: TraceIdentity.stable_id("event", ["after_action_recorded", snapshot.snapshot_id]),
+      reasoner_event_id:
+        TraceIdentity.stable_id("event", ["reasoner_outcome_recorded", snapshot.snapshot_id]),
+      capability_event_id:
+        TraceIdentity.stable_id("event", ["capability_check_recorded", snapshot.snapshot_id]),
+      policy_event_id:
+        TraceIdentity.stable_id("event", ["policy_decision_recorded", snapshot.snapshot_id]),
+      stale_deny_event_id:
+        TraceIdentity.stable_id("event", ["stale_snapshot_denied", snapshot.snapshot_id]),
+      command_event_id:
+        TraceIdentity.stable_id("event", ["command_envelope_issued", snapshot.snapshot_id]),
+      after_action_event_id:
+        TraceIdentity.stable_id("event", ["after_action_recorded", snapshot.snapshot_id]),
       consensus_decision_id: TraceIdentity.stable_id("consensus", [snapshot.snapshot_id]),
       correlation_id: TraceIdentity.stable_id("correlation", [snapshot.snapshot_id])
     }

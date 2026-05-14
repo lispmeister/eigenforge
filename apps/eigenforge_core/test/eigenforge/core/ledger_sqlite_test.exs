@@ -28,25 +28,27 @@ defmodule Eigenforge.Core.LedgerSQLiteTest do
 
     assert :ok = LedgerSQLite.init(config)
 
-    assert {:ok, journal_mode} = LedgerSQLite.query(db_path, "PRAGMA journal_mode;")
-    assert String.trim(journal_mode) == "wal"
+    assert {:ok, [%{"journal_mode" => journal_mode}]} =
+             LedgerSQLite.query_json(db_path, "PRAGMA journal_mode;")
 
-    assert {:ok, schema_sql} =
-             LedgerSQLite.query(
+    assert journal_mode == "wal"
+
+    assert {:ok, [%{"sql" => schema_sql}]} =
+             LedgerSQLite.query_json(
                db_path,
                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ledger_events';"
              )
 
-    assert schema_sql =~ "CREATE TABLE ledger_events"
+    assert schema_sql =~ "CREATE TABLE"
 
-    assert {:ok, triggers_sql} =
-             LedgerSQLite.query(
+    assert {:ok, [%{"names" => triggers}]} =
+             LedgerSQLite.query_json(
                db_path,
-               "SELECT group_concat(name, ',') FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'ledger_events';"
+               "SELECT group_concat(name, ',') AS names FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'ledger_events';"
              )
 
-    assert triggers_sql =~ "ledger_events_no_update"
-    assert triggers_sql =~ "ledger_events_no_delete"
+    assert triggers =~ "ledger_events_no_update"
+    assert triggers =~ "ledger_events_no_delete"
   end
 
   test "rejects invalid genesis rows and enforces append-only mutations", %{db_path: db_path} do
@@ -155,7 +157,8 @@ defmodule Eigenforge.Core.LedgerSQLiteTest do
       core_node_id: "core_a",
       consensus_decision_id:
         if(event_type == "ledger_genesis", do: nil, else: "consensus-#{sequence}"),
-      consensus_status: if(event_type == "ledger_genesis", do: nil, else: "single_core_finalized"),
+      consensus_status:
+        if(event_type == "ledger_genesis", do: nil, else: "single_core_finalized"),
       quorum_ref: %{},
       causation_id: nil,
       correlation_id: "correlation-#{sequence}",

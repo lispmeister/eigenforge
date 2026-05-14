@@ -33,10 +33,18 @@ defmodule Eigenforge.Core.AfterActionObserver do
           optional(:reported_at) => String.t() | nil
         }
 
-  @spec observe(CommandEnvelope.t() | nil) :: {:ok, AfterActionEvent.t() | nil}
-  def observe(nil), do: {:ok, nil}
+  @spec observe(CommandEnvelope.t() | nil, map()) :: {:ok, AfterActionEvent.t() | nil}
+  def observe(command, pre_command_snapshot \\ %{})
+  def observe(nil, _pre_command_snapshot), do: {:ok, nil}
 
-  def observe(%CommandEnvelope{} = command) do
+  def observe(%CommandEnvelope{} = command, pre_command_snapshot) do
+    pre_state = pre_command_fan_state(pre_command_snapshot)
+
+    status =
+      if pre_state == command.requested_state,
+        do: "confirmed_already_in_state",
+        else: "confirmed_changed"
+
     {:ok,
      AfterActionEvent.new!(%{
        after_action_id: TraceIdentity.stable_id("after-action", [command.command_id]),
@@ -47,7 +55,7 @@ defmodule Eigenforge.Core.AfterActionObserver do
        target: command.target,
        requested_state: command.requested_state,
        observed_state: command.requested_state,
-       status: "confirmed_changed",
+       status: status,
        observed_at: timestamp(),
        reported_at: timestamp(),
        source_observation_ids: [TraceIdentity.stable_id("sim-observation", [command.command_id])],
@@ -69,11 +77,19 @@ defmodule Eigenforge.Core.AfterActionObserver do
       {:ok,
        build_after_action(command, %{
          status: status,
-         observed_state: Map.get(observation, :observed_state) || Map.get(observation, "observed_state"),
-         source_observation_ids: [Map.get(observation, :source_observation_id) || Map.get(observation, "source_observation_id")],
+         observed_state:
+           Map.get(observation, :observed_state) || Map.get(observation, "observed_state"),
+         source_observation_ids: [
+           Map.get(observation, :source_observation_id) ||
+             Map.get(observation, "source_observation_id")
+         ],
          source_fault_event_ids: [],
-         observed_at: Map.get(observation, :reported_at) || Map.get(observation, "reported_at") || timestamp(),
-         reported_at: Map.get(observation, :reported_at) || Map.get(observation, "reported_at") || timestamp()
+         observed_at:
+           Map.get(observation, :reported_at) || Map.get(observation, "reported_at") ||
+             timestamp(),
+         reported_at:
+           Map.get(observation, :reported_at) || Map.get(observation, "reported_at") ||
+             timestamp()
        })}
     end
   end
@@ -81,11 +97,11 @@ defmodule Eigenforge.Core.AfterActionObserver do
   @doc """
   Interprets a terminal adapter fault into a terminal after-action event.
   """
-  @spec interpret_fault(CommandEnvelope.t(), fault(), map() | nil) ::
+  @spec interpret_fault(CommandEnvelope.t(), fault(), map()) ::
           {:ok, AfterActionEvent.t()} | {:error, term()}
-  def interpret_fault(%CommandEnvelope{} = command, fault, pre_command_snapshot \\ nil)
-      when is_map(fault) do
-    with :ok <- validate_observation_order(pre_command_snapshot || command, fault),
+  def interpret_fault(%CommandEnvelope{} = command, fault, pre_command_snapshot)
+      when is_map(fault) and is_map(pre_command_snapshot) do
+    with :ok <- validate_observation_order(pre_command_snapshot, fault),
          {:ok, status} <- fault_status(fault) do
       {:ok,
        build_after_action(command, %{
@@ -93,7 +109,8 @@ defmodule Eigenforge.Core.AfterActionObserver do
          observed_state: nil,
          source_observation_ids: [],
          source_fault_event_ids: [Map.get(fault, :event_id) || Map.get(fault, "event_id")],
-         observed_at: Map.get(fault, :reported_at) || Map.get(fault, "reported_at") || timestamp(),
+         observed_at:
+           Map.get(fault, :reported_at) || Map.get(fault, "reported_at") || timestamp(),
          reported_at: Map.get(fault, :reported_at) || Map.get(fault, "reported_at") || timestamp()
        })}
     end
@@ -125,7 +142,9 @@ defmodule Eigenforge.Core.AfterActionObserver do
   def terminal_status?(status), do: status in @terminal_statuses
 
   defp observation_status(command, pre_command_snapshot, observation) do
-    observed_state = Map.get(observation, :observed_state) || Map.get(observation, "observed_state")
+    observed_state =
+      Map.get(observation, :observed_state) || Map.get(observation, "observed_state")
+
     pre_command_state = pre_command_fan_state(pre_command_snapshot)
 
     cond do
@@ -156,8 +175,13 @@ defmodule Eigenforge.Core.AfterActionObserver do
   defp validate_observation_order(pre_command_snapshot, evidence) do
     command_seq = accepted_seq(pre_command_snapshot)
     command_ms = accepted_monotonic_ms(pre_command_snapshot)
-    evidence_seq = Map.get(evidence, :source_received_seq) || Map.get(evidence, "source_received_seq")
-    evidence_ms = Map.get(evidence, :source_received_monotonic_ms) || Map.get(evidence, "source_received_monotonic_ms")
+
+    evidence_seq =
+      Map.get(evidence, :source_received_seq) || Map.get(evidence, "source_received_seq")
+
+    evidence_ms =
+      Map.get(evidence, :source_received_monotonic_ms) ||
+        Map.get(evidence, "source_received_monotonic_ms")
 
     cond do
       is_integer(command_seq) and is_integer(evidence_seq) and evidence_seq > command_seq ->
@@ -188,16 +212,8 @@ defmodule Eigenforge.Core.AfterActionObserver do
 
   defp accepted_monotonic_ms(snapshot) do
     case snapshot do
-      %CommandEnvelope{} = command ->
-        command
-        |> Map.get(:metadata, %{})
-        |> case do
-          map when is_map(map) ->
-            Map.get(map, "command_source_received_monotonic_ms") || Map.get(map, :command_source_received_monotonic_ms)
-
-          _ ->
-            nil
-        end
+      %CommandEnvelope{} ->
+        nil
 
       map when is_map(map) ->
         map
@@ -215,7 +231,12 @@ defmodule Eigenforge.Core.AfterActionObserver do
 
   defp build_after_action(command, attrs) do
     AfterActionEvent.new!(%{
-      after_action_id: TraceIdentity.stable_id("after-action", [command.command_id, attrs.status, attrs.reported_at]),
+      after_action_id:
+        TraceIdentity.stable_id("after-action", [
+          command.command_id,
+          attrs.status,
+          attrs.reported_at
+        ]),
       command_id: command.command_id,
       idempotency_key: command.idempotency_key,
       effect_key: command.effect_key,

@@ -26,7 +26,8 @@ defmodule Eigenforge.Core.MixProject do
   defp deps do
     [
       {:eigenforge_contracts, in_umbrella: true},
-      {:eigenforge_mailbox, in_umbrella: true}
+      {:eigenforge_mailbox, in_umbrella: true},
+      {:exqlite, "~> 0.23"}
     ]
   end
 

@@ -4,6 +4,28 @@ defmodule Eigenforge.Core.AfterActionObserverTest do
   alias Eigenforge.Contracts.CommandEnvelope
   alias Eigenforge.Core.AfterActionObserver
 
+  test "observe/2 returns confirmed_changed when pre-command fan state differs from requested state" do
+    command = command_envelope(%{requested_state: "on"})
+
+    assert {:ok, event} = AfterActionObserver.observe(command, %{"fan_state" => "off"})
+    assert event.status == "confirmed_changed"
+    assert event.observed_state == "on"
+  end
+
+  test "observe/2 returns confirmed_already_in_state when pre-command fan state matches requested state" do
+    command = command_envelope(%{requested_state: "on"})
+
+    assert {:ok, event} = AfterActionObserver.observe(command, %{"fan_state" => "on"})
+    assert event.status == "confirmed_already_in_state"
+  end
+
+  test "observe/1 defaults to confirmed_changed when no pre-command snapshot is given" do
+    command = command_envelope(%{requested_state: "on"})
+
+    assert {:ok, event} = AfterActionObserver.observe(command)
+    assert event.status == "confirmed_changed"
+  end
+
   test "confirms changed when a newer observation reaches the requested state" do
     command = command_envelope(%{requested_state: "on", snapshot_seq: 5})
 
@@ -89,6 +111,69 @@ defmodule Eigenforge.Core.AfterActionObserverTest do
                  reported_at: "2026-05-10T12:00:03.000Z"
                }
              )
+  end
+
+  test "accepts confirmation evidence that is newer by monotonic receive ordering" do
+    command = command_envelope(%{requested_state: "on", snapshot_seq: 5})
+
+    assert {:ok, event} =
+             AfterActionObserver.interpret_observation(
+               command,
+               %{
+                 "fan_state" => "off",
+                 "source_received_seq" => %{"fan" => 5},
+                 "source_received_monotonic_ms" => %{"fan" => 100}
+               },
+               %{
+                 observed_state: "on",
+                 source_observation_id: "obs-6",
+                 source_received_seq: 5,
+                 source_received_monotonic_ms: 101,
+                 reported_at: "2026-05-10T12:00:03.000Z"
+               }
+             )
+
+    assert event.status == "confirmed_changed"
+  end
+
+  test "interpret_fault/3 rejects a fault whose seq equals the pre-command fan seq" do
+    command = command_envelope(%{requested_state: "off", snapshot_seq: 5})
+
+    assert {:error, :stale_confirmation_evidence} =
+             AfterActionObserver.interpret_fault(
+               command,
+               %{
+                 fault_type: "adapter_rejected",
+                 event_id: "fault-5",
+                 source_received_seq: 5,
+                 reported_at: "2026-05-10T12:00:03.000Z"
+               },
+               %{
+                 "source_received_seq" => %{"fan" => 5},
+                 "source_received_monotonic_ms" => %{"fan" => 99}
+               }
+             )
+  end
+
+  test "interpret_fault/3 accepts a fault whose seq is greater than the pre-command fan seq" do
+    command = command_envelope(%{requested_state: "off", snapshot_seq: 5})
+
+    assert {:ok, event} =
+             AfterActionObserver.interpret_fault(
+               command,
+               %{
+                 fault_type: "adapter_rejected",
+                 event_id: "fault-6",
+                 source_received_seq: 6,
+                 reported_at: "2026-05-10T12:00:03.000Z"
+               },
+               %{
+                 "source_received_seq" => %{"fan" => 5},
+                 "source_received_monotonic_ms" => %{"fan" => 99}
+               }
+             )
+
+    assert event.status == "adapter_rejected"
   end
 
   test "maps adapter rejection and timeout to terminal statuses" do

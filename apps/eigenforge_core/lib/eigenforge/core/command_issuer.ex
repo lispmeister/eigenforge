@@ -19,7 +19,8 @@ defmodule Eigenforge.Core.CommandIssuer do
   @signature_version "hmac-sha256-v1"
 
   @type issue_opt ::
-          {:consensus_decision_id, String.t()}
+          {:core_node_id, String.t()}
+          | {:consensus_decision_id, String.t()}
           | {:decision_event_id, String.t()}
           | {:reasoner_outcome_event_id, String.t()}
           | {:capability_event_id, String.t() | nil}
@@ -38,14 +39,18 @@ defmodule Eigenforge.Core.CommandIssuer do
         opts
       ) do
     issued_at = timestamp()
+    core_node_id = Keyword.get(opts, :core_node_id, @core_node_id)
+
     consensus_decision_id =
       Keyword.get_lazy(opts, :consensus_decision_id, fn ->
         TraceIdentity.stable_id("consensus", [snapshot.snapshot_id])
       end)
 
-      base = %{
-      command_id: TraceIdentity.stable_id("cmd", [snapshot.snapshot_id, reasoner.requested_state]),
-      idempotency_key: idempotency_key(snapshot, reasoner, policy, consensus_decision_id),
+    base = %{
+      command_id:
+        TraceIdentity.stable_id("cmd", [snapshot.snapshot_id, reasoner.requested_state]),
+      idempotency_key:
+        idempotency_key(snapshot, reasoner, policy, consensus_decision_id, core_node_id),
       effect_key: effect_key(snapshot, reasoner, Keyword.get(opts, :effect_epoch)),
       subject: @subject,
       target: @target,
@@ -90,10 +95,10 @@ defmodule Eigenforge.Core.CommandIssuer do
 
   def issue(_reasoner, _capability, _policy, _snapshot, _secret, _opts), do: {:ok, nil}
 
-  defp idempotency_key(snapshot, reasoner, policy, consensus_decision_id) do
+  defp idempotency_key(snapshot, reasoner, policy, consensus_decision_id, core_node_id) do
     payload = %{
       format_version: @format_version,
-      core_node_id: @core_node_id,
+      core_node_id: core_node_id,
       room_id: snapshot.room_id,
       subject: @subject,
       target: @target,
@@ -126,21 +131,33 @@ defmodule Eigenforge.Core.CommandIssuer do
   defp effect_epoch(_snapshot, override) when is_binary(override) and override != "", do: override
 
   defp effect_epoch(snapshot, _override) do
-    case map_get(snapshot.source_observation_ids, "fan") do
-      value when is_binary(value) and value != "" -> value
-      _ -> "startup"
+    case map_get(snapshot, :latest_after_action_id) do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        case map_get(snapshot.source_observation_ids, "fan") do
+          value when is_binary(value) and value != "" -> value
+          _ -> "startup"
+        end
     end
   end
 
   defp map_get(map, key) when is_map(map) do
-    atom_key =
-      try do
-        String.to_existing_atom(key)
-      rescue
-        ArgumentError -> nil
-      end
+    case key do
+      k when is_atom(k) ->
+        Map.get(map, k) || Map.get(map, Atom.to_string(k))
 
-    Map.get(map, key) || if(atom_key, do: Map.get(map, atom_key))
+      k when is_binary(k) ->
+        atom_key =
+          try do
+            String.to_existing_atom(k)
+          rescue
+            ArgumentError -> nil
+          end
+
+        Map.get(map, k) || if(atom_key, do: Map.get(map, atom_key))
+    end
   end
 
   defp timestamp, do: CanonicalTime.trace_start()

@@ -55,8 +55,7 @@ defmodule Eigenforge.Trace do
          {:ok, capability} <- CapabilityChecker.check(reasoner, snapshot),
          {:ok, policy} <- PolicyEngine.decide(reasoner, capability, snapshot),
          {:ok, command} <- CommandIssuer.issue(reasoner, capability, policy, snapshot, secret()),
-         {:ok, after_action} <- AfterActionObserver.observe(command) do
-
+         {:ok, after_action} <- AfterActionObserver.observe(command, snapshot) do
       payloads =
         [reasoner, capability, policy, command, after_action]
         |> Enum.reject(&is_nil/1)
@@ -134,6 +133,7 @@ defmodule Eigenforge.Trace do
         [:signature],
         "eigenforge:v1:delivery_receipt"
       )
+
     DeliveryReceipt.new!(%{base | signature: signature})
   end
 
@@ -142,7 +142,8 @@ defmodule Eigenforge.Trace do
 
     {events_reversed, _previous_hash, _sequence, _last_event_id} =
       Enum.reduce(payloads, {[], @genesis_previous_hash, 1, nil}, fn payload,
-                                                                     {events, previous_hash, sequence, last_event_id} ->
+                                                                     {events, previous_hash,
+                                                                      sequence, last_event_id} ->
         event_type = event_type(payload)
         event_id = stable_id("event", [event_type, snapshot.snapshot_id])
         payload_map = Contracts.signable_map(payload)
@@ -172,6 +173,7 @@ defmodule Eigenforge.Trace do
 
         event_hash = Contracts.hash_excluding(base, [:event_hash, :signature])
         unsigned = %{base | event_hash: event_hash}
+
         signature =
           Contracts.sign_hmac_excluding(
             unsigned,
@@ -179,6 +181,7 @@ defmodule Eigenforge.Trace do
             [:signature],
             "eigenforge:v1:ledger_event"
           )
+
         event = LedgerEvent.new!(%{unsigned | signature: signature})
 
         {[event | events], event.event_hash, sequence + 1, event.event_id}
@@ -225,7 +228,8 @@ defmodule Eigenforge.Trace do
 
   defp verify_trace_shape(_trace), do: {:error, :missing_verification}
 
-  defp verify_trace_file(path, %{"fixture" => fixture_path} = trace) when is_binary(fixture_path) do
+  defp verify_trace_file(path, %{"fixture" => fixture_path} = trace)
+       when is_binary(fixture_path) do
     with :ok <- verify_trace_shape(trace),
          {:ok, expected_trace} <- run_file(trace_fixture_path(path, fixture_path)) do
       expected_json = Contracts.canonical_json(expected_trace)
@@ -279,7 +283,10 @@ defmodule Eigenforge.Trace do
   defp steps(reasoner, capability, policy, command, delivery, after_action) do
     [
       %{"name" => "reasoner_outcome", "result" => reasoner.outcome_type},
-      %{"name" => "capability_check", "result" => if(capability, do: capability.result, else: "not_checked")},
+      %{
+        "name" => "capability_check",
+        "result" => if(capability, do: capability.result, else: "not_checked")
+      },
       %{"name" => "policy_decision", "result" => policy.decision},
       %{"name" => "finalized_decision", "result" => @consensus_status},
       %{"name" => "local_ledger_commit", "result" => "committed"},

@@ -29,7 +29,13 @@ defmodule Eigenforge.Core.CommandIssuerTest do
     policy_without_fan = policy(snapshot_without_fan, reasoner_without_fan, "policy-1")
 
     assert {:ok, command_with_fan} =
-             CommandIssuer.issue(reasoner_with_fan, nil, policy_with_fan, snapshot_with_fan, @secret)
+             CommandIssuer.issue(
+               reasoner_with_fan,
+               nil,
+               policy_with_fan,
+               snapshot_with_fan,
+               @secret
+             )
 
     assert {:ok, command_without_fan} =
              CommandIssuer.issue(
@@ -59,6 +65,22 @@ defmodule Eigenforge.Core.CommandIssuerTest do
     refute startup_command.effect_key == terminal_command.effect_key
   end
 
+  test "effect key can use a terminal after-action boundary from an enriched snapshot" do
+    snapshot = snapshot(nil) |> Map.put(:latest_after_action_id, "after-action-1")
+    reasoner = reasoner(snapshot, "outcome-1")
+    policy = policy(snapshot, reasoner, "policy-1")
+
+    assert {:ok, enriched_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret)
+
+    assert {:ok, overridden_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret,
+               effect_epoch: "after-action-1"
+             )
+
+    assert enriched_command.effect_key == overridden_command.effect_key
+  end
+
   test "distinct consensus decisions produce distinct idempotency keys" do
     snapshot = snapshot("obs-fan-1")
     reasoner = reasoner(snapshot, "outcome-1")
@@ -75,6 +97,26 @@ defmodule Eigenforge.Core.CommandIssuerTest do
              )
 
     refute first_command.idempotency_key == second_command.idempotency_key
+  end
+
+  test "distinct node ids produce distinct idempotency keys" do
+    snapshot = snapshot("obs-fan-1")
+    reasoner = reasoner(snapshot, "outcome-1")
+    policy = policy(snapshot, reasoner, "policy-1")
+
+    assert {:ok, core_a_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret,
+               core_node_id: "core_a",
+               consensus_decision_id: "consensus-1"
+             )
+
+    assert {:ok, core_b_command} =
+             CommandIssuer.issue(reasoner, nil, policy, snapshot, @secret,
+               core_node_id: "core_b",
+               consensus_decision_id: "consensus-1"
+             )
+
+    refute core_a_command.idempotency_key == core_b_command.idempotency_key
   end
 
   test "the same finalized decision keeps the same idempotency key" do
