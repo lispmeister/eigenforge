@@ -3,15 +3,18 @@ defmodule Eigenforge.Mailbox.CommandPublisher do
   V1 mailbox publisher for signed command envelope deliveries.
   """
 
+  alias Eigenforge.Mailbox.PubSubTransport
   alias Eigenforge.Mailbox.ReceiptStore
 
   @default_registry Eigenforge.Mailbox.Registry
   @default_store Eigenforge.Mailbox.ReceiptStore
+  @default_transport PubSubTransport
 
   @spec publish(String.t(), map() | struct(), keyword()) :: :ok | {:error, term()}
   def publish(topic, command, opts \\ []) when is_binary(topic) do
     registry = Keyword.get(opts, :registry_name, @default_registry)
     store = Keyword.get(opts, :receipt_store, @default_store)
+    transport = Keyword.get(opts, :transport, @default_transport)
     command = wire_map(command)
 
     with {:ok, receipt} <-
@@ -20,18 +23,15 @@ defmodule Eigenforge.Mailbox.CommandPublisher do
              ledger_event_hash: Keyword.fetch!(opts, :ledger_event_hash),
              decision_event_id: Keyword.fetch!(opts, :decision_event_id)
            ),
-         :ok <- ReceiptStore.mark_phase(store, receipt.receipt_id, "publish_attempted", %{
-           published_at: receipt.delivered_at
-         }) do
-      payload = %{
-        "command" => command,
-        "receipt" => wire_map(receipt)
-      }
-
-      Registry.dispatch(registry, topic, fn entries ->
-        Enum.each(entries, fn {pid, _value} -> send(pid, {:mailbox_command, topic, payload}) end)
-      end)
-
+         :ok <-
+           ReceiptStore.mark_phase(store, receipt.receipt_id, "publish_attempted", %{
+             published_at: receipt.delivered_at
+           }),
+         {:ok, _evidence} <-
+           transport.publish_command(command, wire_map(receipt),
+             registry_name: registry,
+             topic: topic
+           ) do
       :ok
     end
   end

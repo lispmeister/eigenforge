@@ -1,11 +1,11 @@
 ---
 id: eig-pe4s
-status: open
+status: closed
 deps: [eig-ag1x, eig-ce7n]
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 2
+priority: 1
 assignee: lispmeister
 ---
 # PolicyEngine is missing 6 of 9 spec-required decision types (§8)

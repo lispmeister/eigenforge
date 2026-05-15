@@ -5,10 +5,10 @@ deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 4
+priority: 2
 assignee: lispmeister
 ---
-# Add IO.AdapterSupervisor to eigenforge_io OTP layout (§2)
+# Add IO.AdapterSupervisor (§2 OTP layout)
 
 The spec (§2) lists `IO.AdapterSupervisor` in the suggested OTP process layout. Currently `IO.Application` starts adapters (`HomeAssistantClient` or `SimulatorClient`) directly under `IO.Supervisor` with no intermediate supervisor for the adapter subtree.
 

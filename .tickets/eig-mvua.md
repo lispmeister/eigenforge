@@ -1,6 +1,6 @@
 ---
 id: eig-mvua
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T07:45:01Z
@@ -8,7 +8,7 @@ type: task
 priority: 4
 assignee: lispmeister
 ---
-# Spec §4: add mix eigenforge.ledger.migrate no-op stub to reserve migration interface
+# Duplicate of eig-lm2z: add mix eigenforge.ledger.migrate no-op stub (§4)
 
 §4 says 'Forward/backward migrations require an explicit later migration tool.' No tool exists and there is no enforcement that prevents workarounds that would silently accept future schema drift. Stubbing the interface now reserves it and makes accidental drift fail loudly.
 

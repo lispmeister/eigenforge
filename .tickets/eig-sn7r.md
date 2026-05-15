@@ -5,10 +5,10 @@ deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 4
+priority: 2
 assignee: lispmeister
 ---
-# Extract IO.SnapshotNormalizer from HomeAssistantAdapter (§2 OTP layout)
+# Extract IO.SnapshotNormalizer from HomeAssistantAdapter (§2)
 
 The spec (§2) lists `IO.SnapshotNormalizer` as a separate module in the suggested OTP process layout. Currently normalization logic lives in `HomeAssistantAdapter.normalize_snapshot/3` (and implicitly in `SimulatorClient`), making it harder to test normalization in isolation and conflating adapter-specific translation with the shared contract normalization logic.
 

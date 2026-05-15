@@ -5,10 +5,10 @@ deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 4
+priority: 2
 assignee: lispmeister
 ---
-# Add Mailbox.Projections (§2 OTP layout, §9)
+# Add Mailbox.Projections (§2, §9)
 
 The spec (§2) lists `Mailbox.Projections` in the suggested OTP process layout:
 

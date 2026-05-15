@@ -5,10 +5,10 @@ deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 4
+priority: 2
 assignee: lispmeister
 ---
-# Add Mailbox.LedgerNotifier (§2 OTP layout)
+# Add Mailbox.LedgerNotifier (§2)
 
 The spec (§2) lists `Mailbox.LedgerNotifier` in the suggested OTP process layout. The spec (§11) states that projection subscribers should receive lightweight notifications:
 

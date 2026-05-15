@@ -16,6 +16,7 @@ defmodule Eigenforge.MixTasks.LedgerTasksTest do
       "EIGENFORGE_CORE_NODE_ID" => System.get_env("EIGENFORGE_CORE_NODE_ID"),
       "EIGENFORGE_CORE_DB_PATH" => System.get_env("EIGENFORGE_CORE_DB_PATH")
     }
+    original_secret = Application.fetch_env!(:eigenforge_core, :hmac_secret)
 
     System.put_env("EIGENFORGE_IO_MODE", "simulator")
     System.put_env("EIGENFORGE_HMAC_SECRET", "ledger-task-secret")
@@ -24,6 +25,8 @@ defmodule Eigenforge.MixTasks.LedgerTasksTest do
     Application.put_env(:eigenforge_core, :hmac_secret, "ledger-task-secret")
 
     on_exit(fn ->
+      Application.put_env(:eigenforge_core, :hmac_secret, original_secret)
+
       Enum.each(original_env, fn
         {key, nil} -> System.delete_env(key)
         {key, value} -> System.put_env(key, value)
@@ -69,7 +72,9 @@ defmodule Eigenforge.MixTasks.LedgerTasksTest do
     end
   end
 
-  test "ledger verify fails when a durable payload has the wrong schema version", %{db_path: db_path} do
+  test "ledger verify fails when a durable payload has the wrong schema version", %{
+    db_path: db_path
+  } do
     Mix.Task.reenable("eigenforge.ledger.genesis")
     Mix.Task.reenable("eigenforge.ledger.verify")
 
@@ -116,6 +121,72 @@ defmodule Eigenforge.MixTasks.LedgerTasksTest do
 
     assert_raise Mix.Error, ~r/ledger verify failed/, fn ->
       Mix.Task.run("eigenforge.ledger.verify", [])
+    end
+  end
+
+  test "ledger migrate validates a V1 ledger and rejects unsupported targets", %{
+    db_path: _db_path
+  } do
+    Mix.Task.reenable("eigenforge.ledger.genesis")
+    Mix.Task.reenable("eigenforge.ledger.migrate")
+
+    assert :ok = Mix.Task.run("eigenforge.ledger.genesis", [])
+    assert :ok = Mix.Task.run("eigenforge.ledger.migrate", ["--from", "1", "--to", "1"])
+
+    Mix.Task.reenable("eigenforge.ledger.migrate")
+
+    assert_raise Mix.Error, ~r/no V1→VN migration defined/, fn ->
+      Mix.Task.run("eigenforge.ledger.migrate", ["--from", "1", "--to", "2"])
+    end
+  end
+
+  test "ledger migrate fails when a payload is not schema version 1", %{db_path: db_path} do
+    Mix.Task.reenable("eigenforge.ledger.genesis")
+    Mix.Task.reenable("eigenforge.ledger.migrate")
+
+    assert :ok = Mix.Task.run("eigenforge.ledger.genesis", [])
+    assert {:ok, _} = LedgerSQLite.query(db_path, "DROP TRIGGER ledger_events_no_update;")
+
+    assert {:ok, _} =
+             LedgerSQLite.query(
+               db_path,
+               """
+               INSERT INTO ledger_events (
+                 sequence, event_id, event_type, core_node_id, consensus_decision_id,
+                 consensus_status, quorum_ref, causation_id, correlation_id, subject,
+                 source_app, occurred_at, observed_at, persisted_at, format_version,
+                 schema_id, schema_version, payload, payload_hash, previous_event_hash,
+                 event_hash, signature_version, signature
+               ) VALUES (
+                 2,
+                 'event-2',
+                 'reasoner_outcome_recorded',
+                 'core_a',
+                 'consensus-2',
+                 'single_core_finalized',
+                 '{}',
+                 'event-1',
+                 'corr-2',
+                 'core_rule_stub',
+                 'eigenforge_core',
+                 '2026-05-08T12:00:00.000Z',
+                 '2026-05-08T12:00:00.000Z',
+                 '2026-05-08T12:00:00.000Z',
+                 'json-canonical-v1',
+                 'eigenforge.ledger_event',
+                 1,
+                 '{"schema_id":"eigenforge.reasoner_outcome","schema_version":2,"format_version":"json-canonical-v1","reasoner_outcome_id":"outcome-1","reasoner_id":"core_rule_stub","reasoner_version":"v1","snapshot_id":"snap-1","snapshot_hash":"#{String.duplicate("a", 64)}","outcome_type":"propose_action","target":"actuator:fan","requested_state":"on","reason":"test","confidence_bps":10000,"metadata":{}}',
+                 '#{String.duplicate("b", 64)}',
+                 'hash-1',
+                 'hash-2',
+                 'hmac-sha256-v1',
+                 'sig-2'
+               );
+               """
+             )
+
+    assert_raise Mix.Error, ~r/ledger migrate failed: {:invalid_schema_version, 2, 2}/, fn ->
+      Mix.Task.run("eigenforge.ledger.migrate", ["--from", "1", "--to", "1"])
     end
   end
 end

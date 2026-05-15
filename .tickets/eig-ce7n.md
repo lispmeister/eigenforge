@@ -1,14 +1,14 @@
 ---
 id: eig-ce7n
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 2
+priority: 1
 assignee: lispmeister
 ---
-# CapabilityChecker must load and verify signed capability grants from config at startup (§8)
+# Load and verify signed capability grants at startup (§8)
 
 The spec (§8) requires:
 

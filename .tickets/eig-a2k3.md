@@ -8,15 +8,15 @@ type: task
 priority: 3
 assignee: lispmeister
 ---
-# Add V2-shape forward-compat golden trace fixture to verify migration promise
+# Add the V2 forward-compat trace fixture and verifier warning
 
-§11 and §2 promise that V1 field shapes (consensus_decision_id, consensus_status, quorum_ref, supporting vote refs) leave V2 migration straightforward. Today this is only asserted in field declarations. No fixture exercises a quorum-shaped ledger event being read by V1 tooling. A single forward-compat fixture converts the promise into a verified property.
+§13 already defines the V2-shape forward-compat fixture and the V1 verifier behavior: accept `consensus_status=quorum_finalized` with a logged warning. The remaining work is to create the fixture and make `mix eigenforge.ledger.verify` emit the documented warning instead of treating the shape as a spec question.
 
-Proposed change: add test/golden_traces/v2_quorum_shape_compat.json containing a hand-built command_envelope_issued ledger event with consensus_status=quorum_finalized, non-empty quorum_ref, and supporting vote references. Determine and pin in §11 whether mix eigenforge.ledger.verify should (a) accept the shape with a known V1 warning, or (b) reject it with a known unsupported_consensus_status error. Implement the corresponding behavior.
+Add `test/golden_traces/v2_quorum_shape_compat.json` containing a hand-built `command_envelope_issued` ledger event with `consensus_status=quorum_finalized`, non-empty `quorum_ref`, and supporting vote references. Implement the corresponding verifier behavior.
 
 ## Acceptance Criteria
 
-test/golden_traces/v2_quorum_shape_compat.json committed. mix eigenforge.ledger.verify has a deterministic, documented outcome on it (accept-with-warning or reject-with-known-error). §11 explicitly states the V1 behavior on quorum-shaped events.
+`test/golden_traces/v2_quorum_shape_compat.json` is committed. `mix eigenforge.ledger.verify` has the documented V1 warning behavior on the fixture. §13 and the verifier agree on the forward-compat rule.
 
 
 ## Notes

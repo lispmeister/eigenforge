@@ -8,12 +8,14 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   alias Eigenforge.Contracts
   alias Eigenforge.Contracts.CommandEnvelope
   alias Eigenforge.Contracts.NormalizedSnapshot
+  alias Eigenforge.Core.ActuatorGate
   alias Eigenforge.Core.AfterActionObserver
   alias Eigenforge.Core.CapabilityChecker
   alias Eigenforge.Core.CommandIssuer
   alias Eigenforge.Core.LedgerProjections
   alias Eigenforge.Core.LedgerWriter
   alias Eigenforge.Core.PolicyEngine
+  alias Eigenforge.Core.PendingCommandRecovery
   alias Eigenforge.Core.PubSub
   alias Eigenforge.Core.Reasoners.Co2Rules
   alias Eigenforge.Core.TraceIdentity
@@ -42,13 +44,6 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   @impl true
   def init(opts) do
     room_id = Keyword.fetch!(opts, :room_id)
-    pubsub_registry = Keyword.get(opts, :pubsub_registry, Eigenforge.Core.PubSub.Registry)
-    :ok = subscribe(room_id, pubsub_registry)
-
-    io_fault_status_registry =
-      Keyword.get(opts, :io_fault_status_registry, Eigenforge.Core.IoFaultStatus.Registry)
-
-    :ok = subscribe_faults(io_fault_status_registry)
 
     state = %{
       room_id: room_id,
@@ -75,7 +70,17 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
       |> Map.put(:started_at_utc, current_utc(state))
       |> Map.put(:started_monotonic_ms, current_monotonic_ms(state))
 
-    {:ok, recover_pending_commands(state)}
+    state = PendingCommandRecovery.recover_pending_commands(state)
+
+    pubsub_registry = Keyword.get(opts, :pubsub_registry, Eigenforge.Core.PubSub.Registry)
+    :ok = subscribe(room_id, pubsub_registry)
+
+    io_fault_status_registry =
+      Keyword.get(opts, :io_fault_status_registry, Eigenforge.Core.IoFaultStatus.Registry)
+
+    :ok = subscribe_faults(io_fault_status_registry)
+
+    {:ok, state}
   end
 
   @impl true
@@ -127,10 +132,11 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     refs = event_refs(snapshot)
 
     with {:ok, reasoner} <- state.reasoner_module.reason(snapshot),
-         {:ok, capability} <- CapabilityChecker.check(reasoner, snapshot),
-         {:ok, policy} <- PolicyEngine.decide(reasoner, capability, snapshot),
+         {:ok, gated_reasoner} <- ActuatorGate.gate(reasoner, snapshot),
+         {:ok, capability} <- CapabilityChecker.check(gated_reasoner, snapshot),
+         {:ok, policy} <- PolicyEngine.decide(gated_reasoner, capability, snapshot),
          {:ok, command} <-
-           CommandIssuer.issue(reasoner, capability, policy, snapshot, state.secret,
+           CommandIssuer.issue(gated_reasoner, capability, policy, snapshot, state.secret,
              core_node_id: state.core_node_id,
              consensus_decision_id: refs.consensus_decision_id,
              decision_event_id: refs.command_event_id,
@@ -139,7 +145,8 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
              effect_epoch: resolved_effect_epoch(snapshot, state)
            ),
          {:ok, guarded_command} <- apply_in_flight_guard(command, snapshot.room_id, state),
-         payloads <- [reasoner, capability, policy, guarded_command] |> Enum.reject(&is_nil/1),
+         payloads <-
+           [gated_reasoner, capability, policy, guarded_command] |> Enum.reject(&is_nil/1),
          {:ok, appended_events} <- append_payloads(payloads, snapshot, refs, state) do
       if guarded_command do
         command_event = Map.fetch!(appended_events, "command_envelope_issued")
@@ -405,9 +412,9 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     end
   end
 
-  defp recover_pending_commands(%{db_path: nil} = state), do: state
+  def recover_pending_commands(%{db_path: nil} = state), do: state
 
-  defp recover_pending_commands(state) do
+  def recover_pending_commands(state) do
     case fetch_all_pending_room_states(state) do
       {:ok, room_states} ->
         Enum.reduce(room_states, state, fn room_state, acc ->
@@ -431,11 +438,12 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     end
   end
 
-  defp fetch_all_pending_room_states(%{db_path: db_path}) do
+  defp fetch_all_pending_room_states(%{db_path: db_path, room_id: room_id}) do
     sql = """
     SELECT *
     FROM latest_room_control_state
-    WHERE pending_command_id IS NOT NULL
+    WHERE room_id = '#{String.replace(room_id, "'", "''")}'
+      AND pending_command_id IS NOT NULL
       AND pending_command_id != '';
     """
 

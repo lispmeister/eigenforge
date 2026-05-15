@@ -12,10 +12,10 @@ defmodule Eigenforge.Core.Reasoners.Co2RulesTest do
     assert outcome.requested_state == "on"
   end
 
-  test "high CO2 with fan already on becomes propose_no_action" do
+  test "high CO2 with fan already on still proposes action before the gate" do
     assert {:ok, outcome} = Co2Rules.reason(snapshot(%{co2_ppm: 1200, fan_state: "on"}))
 
-    assert outcome.outcome_type == "propose_no_action"
+    assert outcome.outcome_type == "propose_action"
     assert outcome.requested_state == "on"
   end
 

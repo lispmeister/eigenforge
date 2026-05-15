@@ -5,10 +5,10 @@ deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 4
+priority: 2
 assignee: lispmeister
 ---
-# IoFaultStatus module belongs in eigenforge_io, not eigenforge_core (§2 boundary)
+# Move IoFaultStatus into eigenforge_io (§2 boundary)
 
 The spec (§2) assigns the IO fault/status stream to `eigenforge_io`:
 

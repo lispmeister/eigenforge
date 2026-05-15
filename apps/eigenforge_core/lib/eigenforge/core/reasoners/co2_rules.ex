@@ -35,16 +35,6 @@ defmodule Eigenforge.Core.Reasoners.Co2Rules do
     )
   end
 
-  def reason(%NormalizedSnapshot{co2_ppm: co2, fan_state: "on"} = snapshot) when co2 > 1000 do
-    outcome(
-      snapshot,
-      "propose_no_action",
-      @target,
-      "on",
-      "Threshold reached but no action due to CO2 fan actuator already in state ON."
-    )
-  end
-
   def reason(%NormalizedSnapshot{co2_ppm: co2} = snapshot) when co2 > 1000 do
     outcome(
       snapshot,
@@ -52,16 +42,6 @@ defmodule Eigenforge.Core.Reasoners.Co2Rules do
       @target,
       "on",
       "CO2 #{co2} ppm exceeds 1000 ppm threshold; propose vent fan ON."
-    )
-  end
-
-  def reason(%NormalizedSnapshot{co2_ppm: co2, fan_state: "off"} = snapshot) when co2 < 500 do
-    outcome(
-      snapshot,
-      "propose_no_action",
-      @target,
-      "off",
-      "Threshold reached but no action due to CO2 fan actuator already in state OFF."
     )
   end
 

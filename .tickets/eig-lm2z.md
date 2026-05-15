@@ -1,14 +1,14 @@
 ---
 id: eig-lm2z
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 2
+priority: 1
 assignee: lispmeister
 ---
-# Add mix eigenforge.ledger.migrate no-op stub (§4 required)
+# Add mix eigenforge.ledger.migrate (§4 required)
 
 The spec (§4) explicitly requires a migration tool stub:
 

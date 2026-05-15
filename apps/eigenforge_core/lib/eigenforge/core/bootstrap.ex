@@ -19,7 +19,8 @@ defmodule Eigenforge.Core.Bootstrap do
   @spec validate(RuntimeConfig.t()) :: validation_result()
   def validate(%RuntimeConfig{} = config) do
     with {:ok, %{active_room: %{"room_id" => room_id}}} <- SignedConfig.load_device_inventory(config),
-         {:ok, _capability_grants} <- SignedConfig.load_capability_grants(config),
+         {:ok, capability_grants} <- SignedConfig.load_capability_grants(config),
+         :ok <- Eigenforge.Core.CapabilityChecker.configure(capability_grants),
          :ok <- validate_simulator_fixtures(config),
          :ok <- prepare_ledger(config),
          :ok <- LedgerTooling.verify(config.core_db_path, config.core_node_id, config.hmac_secret) do

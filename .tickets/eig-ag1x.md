@@ -1,6 +1,6 @@
 ---
 id: eig-ag1x
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T00:00:00Z
@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: lispmeister
 ---
-# Implement Core.ActuatorGate as a separate pipeline stage between reasoner and capability check
+# Add Core.ActuatorGate between reasoner and capability check
 
 The spec (§7) is explicit: "The reasoner module itself only produces `propose_action`, `no_threshold_event`, and `insufficient_fresh_data`. `Core.ActuatorGate` observes the raw reasoner result and, when `propose_action` would be redundant (fan already in the requested state for idempotent actuators), rewrites it to `propose_no_action` before the outcome is recorded or passed to capability checking."
 

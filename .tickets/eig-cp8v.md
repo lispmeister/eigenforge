@@ -1,14 +1,14 @@
 ---
 id: eig-cp8v
-status: open
+status: closed
 deps: [eig-85hp]
 links: [eig-85hp]
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 2
+priority: 1
 assignee: lispmeister
 ---
-# Implement Mailbox.CommandTransport behaviour and Mailbox.PubSubTransport (§9)
+# Add Mailbox.CommandTransport and PubSubTransport (§9)
 
 The spec (§9) requires an explicit behaviour:
 

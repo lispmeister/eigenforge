@@ -12,6 +12,7 @@ defmodule Eigenforge.Trace do
   alias Eigenforge.Contracts.PolicyDecision
   alias Eigenforge.Contracts.ReasonerOutcome
   alias Eigenforge.Core.AfterActionObserver
+  alias Eigenforge.Core.ActuatorGate
   alias Eigenforge.Core.CapabilityChecker
   alias Eigenforge.Core.CanonicalTime
   alias Eigenforge.Core.CommandIssuer
@@ -26,7 +27,6 @@ defmodule Eigenforge.Trace do
   @subject "core_rule_stub"
   @signature_version "hmac-sha256-v1"
   @genesis_previous_hash "eigenforge-ledger-genesis-v1"
-  @core_node_id "core_a"
   @ledger_backend "local_sqlite"
   @consensus_status "single_core_finalized"
 
@@ -40,7 +40,8 @@ defmodule Eigenforge.Trace do
     with {:ok, body} <- File.read(path),
          {:ok, fixture} <- decode(body),
          {:ok, %{snapshot: snapshot}} <- SimulatorFixture.load(fixture),
-         {:ok, trace} <- run(snapshot, fixture_display_path(path)) do
+         {:ok, trace} <-
+           run(snapshot, fixture_display_path(path), core_node_id: trace_core_node_id(fixture)) do
       {:ok, trace}
     end
   end
@@ -48,34 +49,41 @@ defmodule Eigenforge.Trace do
   @doc """
   Runs a deterministic trace from a fixture map.
   """
-  @spec run(map(), Path.t() | nil) :: run_result()
-  def run(fixture, fixture_path \\ nil) when is_map(fixture) do
+  @spec run(map(), Path.t() | nil, keyword()) :: run_result()
+  def run(fixture, fixture_path \\ nil, opts \\ []) when is_map(fixture) do
+    resolved_core_node_id = core_node_id(opts)
+
     with {:ok, snapshot} <- build_snapshot(fixture),
          {:ok, reasoner} <- reason(snapshot),
-         {:ok, capability} <- CapabilityChecker.check(reasoner, snapshot),
-         {:ok, policy} <- PolicyEngine.decide(reasoner, capability, snapshot),
-         {:ok, command} <- CommandIssuer.issue(reasoner, capability, policy, snapshot, secret()),
+         {:ok, gated_reasoner} <- ActuatorGate.gate(reasoner, snapshot),
+         {:ok, capability} <- CapabilityChecker.check(gated_reasoner, snapshot),
+         {:ok, policy} <- PolicyEngine.decide(gated_reasoner, capability, snapshot),
+         {:ok, command} <-
+           CommandIssuer.issue(gated_reasoner, capability, policy, snapshot, secret(),
+             core_node_id: resolved_core_node_id
+           ),
          {:ok, after_action} <- AfterActionObserver.observe(command, snapshot) do
       payloads =
-        [reasoner, capability, policy, command, after_action]
+        [gated_reasoner, capability, policy, command, after_action]
         |> Enum.reject(&is_nil/1)
 
-      ledger_events = build_ledger(payloads, snapshot)
+      ledger_events = build_ledger(payloads, snapshot, resolved_core_node_id)
       delivery = maybe_delivery(command, ledger_events)
 
       trace =
         %{
           "trace_id" => stable_id("trace", [snapshot.snapshot_id]),
           "fixture" => fixture_path,
-          "core_node_id" => @core_node_id,
+          "core_node_id" => resolved_core_node_id,
           "ledger_backend" => @ledger_backend,
           "consensus_status" => @consensus_status,
-          "steps" => steps(reasoner, capability, policy, command, delivery, after_action),
+          "steps" => steps(gated_reasoner, capability, policy, command, delivery, after_action),
           "ledger_events" => Enum.map(ledger_events, &public_map/1),
           "command_envelopes" => maybe_list(command),
           "delivery_receipts" => maybe_list(delivery),
           "after_actions" => maybe_list(after_action),
-          "verification" => verify_trace(ledger_events, command, delivery, after_action)
+          "verification" =>
+            verify_trace(ledger_events, command, delivery, after_action, resolved_core_node_id)
         }
 
       {:ok, Redaction.redact(trace, secrets: redaction_secrets())}
@@ -137,7 +145,7 @@ defmodule Eigenforge.Trace do
     DeliveryReceipt.new!(%{base | signature: signature})
   end
 
-  defp build_ledger(payloads, snapshot) do
+  defp build_ledger(payloads, snapshot, core_node_id) do
     consensus_decision_id = stable_id("consensus", [snapshot.snapshot_id])
 
     {events_reversed, _previous_hash, _sequence, _last_event_id} =
@@ -152,7 +160,7 @@ defmodule Eigenforge.Trace do
           event_id: event_id,
           sequence: sequence,
           event_type: event_type,
-          core_node_id: @core_node_id,
+          core_node_id: core_node_id,
           consensus_decision_id: consensus_decision_id,
           consensus_status: @consensus_status,
           quorum_ref: %{},
@@ -197,11 +205,11 @@ defmodule Eigenforge.Trace do
   defp event_type(%CommandEnvelope{}), do: "command_envelope_issued"
   defp event_type(%AfterActionEvent{}), do: "after_action_recorded"
 
-  defp verify_trace(ledger_events, command, delivery, after_action) do
+  defp verify_trace(ledger_events, command, delivery, after_action, core_node_id) do
     %{
       "ledger_hash_chain_valid" => ledger_hash_chain_valid?(ledger_events),
-      "local_ledger_committed" => local_ledger_committed?(ledger_events),
-      "consensus_status_valid" => consensus_status_valid?(ledger_events),
+      "local_ledger_committed" => local_ledger_committed?(ledger_events, core_node_id),
+      "consensus_status_valid" => consensus_status_valid?(ledger_events, core_node_id),
       "command_delivery_after_local_commit" =>
         is_nil(command) or Enum.any?(ledger_events, &(&1.event_type == "command_envelope_issued")),
       "delivery_receipt_valid" =>
@@ -213,15 +221,16 @@ defmodule Eigenforge.Trace do
   end
 
   defp verify_trace_shape(%{
-         "core_node_id" => @core_node_id,
+         "core_node_id" => core_node_id,
          "ledger_backend" => @ledger_backend,
          "consensus_status" => @consensus_status,
          "ledger_events" => ledger_events,
          "verification" => verification
        })
        when is_list(ledger_events) and is_map(verification) do
-    if Enum.all?(verification, fn {_key, value} -> value == true end) and
-         trace_consensus_shape_valid?(ledger_events),
+    if is_binary(core_node_id) and core_node_id != "" and
+         Enum.all?(verification, fn {_key, value} -> value == true end) and
+         trace_consensus_shape_valid?(ledger_events, core_node_id),
        do: :ok,
        else: {:error, {:verification_failed, verification}}
   end
@@ -253,11 +262,11 @@ defmodule Eigenforge.Trace do
     |> Enum.all?(fn [left, right] -> right.previous_event_hash == left.event_hash end)
   end
 
-  defp local_ledger_committed?(events) do
-    Enum.all?(events, &(&1.core_node_id == @core_node_id))
+  defp local_ledger_committed?(events, core_node_id) do
+    Enum.all?(events, &(&1.core_node_id == core_node_id))
   end
 
-  defp consensus_status_valid?(events) do
+  defp consensus_status_valid?(events, _core_node_id) do
     Enum.all?(events, fn event ->
       event.consensus_status == @consensus_status and
         is_binary(event.consensus_decision_id) and
@@ -266,7 +275,7 @@ defmodule Eigenforge.Trace do
     end)
   end
 
-  defp trace_consensus_shape_valid?(events) do
+  defp trace_consensus_shape_valid?(events, core_node_id) do
     consensus_ids =
       events
       |> Enum.map(&Map.get(&1, "consensus_decision_id"))
@@ -274,7 +283,7 @@ defmodule Eigenforge.Trace do
 
     match?([id] when is_binary(id) and id != "", consensus_ids) and
       Enum.all?(events, fn event ->
-        Map.get(event, "core_node_id") == @core_node_id and
+        Map.get(event, "core_node_id") == core_node_id and
           Map.get(event, "consensus_status") == @consensus_status and
           Map.get(event, "quorum_ref") == %{}
       end)
@@ -352,6 +361,13 @@ defmodule Eigenforge.Trace do
       if File.exists?(derived_path), do: derived_path, else: Path.expand(fixture_path)
     end
   end
+
+  defp core_node_id(opts), do: Keyword.get(opts, :core_node_id, default_core_node_id())
+
+  defp trace_core_node_id(fixture) when is_map(fixture),
+    do: Map.get(fixture, "core_node_id", default_core_node_id())
+
+  defp default_core_node_id, do: "core_a"
 
   defp secret do
     Application.fetch_env!(:eigenforge_core, :hmac_secret)

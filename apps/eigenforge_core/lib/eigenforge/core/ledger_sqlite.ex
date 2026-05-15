@@ -45,7 +45,28 @@ defmodule Eigenforge.Core.LedgerSQLite do
     end
   end
 
-  @spec append_event(String.t(), LedgerEvent.t() | map()) :: :ok | {:error, init_error()}
+  @spec open(String.t()) :: {:ok, Exqlite.Sqlite3.db()} | {:error, init_error()}
+  def open(db_path) when is_binary(db_path) do
+    case Exqlite.Sqlite3.open(db_path) do
+      {:ok, conn} -> {:ok, conn}
+      {:error, reason} -> {:error, {:sqlite_unavailable, reason}}
+    end
+  end
+
+  @spec close(Exqlite.Sqlite3.db()) :: :ok
+  def close(conn), do: Exqlite.Sqlite3.close(conn)
+
+  @spec begin_immediate(Exqlite.Sqlite3.db()) :: :ok | {:error, init_error()}
+  def begin_immediate(conn), do: execute_conn(conn, "BEGIN IMMEDIATE;")
+
+  @spec commit(Exqlite.Sqlite3.db()) :: :ok | {:error, init_error()}
+  def commit(conn), do: execute_conn(conn, "COMMIT;")
+
+  @spec rollback(Exqlite.Sqlite3.db()) :: :ok | {:error, init_error()}
+  def rollback(conn), do: execute_conn(conn, "ROLLBACK;")
+
+  @spec append_event(String.t() | Exqlite.Sqlite3.db(), LedgerEvent.t() | map()) ::
+          :ok | {:error, init_error()}
   def append_event(db_path, %LedgerEvent{} = event) when is_binary(db_path) do
     payload_json = Contracts.canonical_json(event.payload)
     quorum_ref_json = Contracts.canonical_json(event.quorum_ref)
@@ -105,6 +126,63 @@ defmodule Eigenforge.Core.LedgerSQLite do
     end
   end
 
+  def append_event(conn, %LedgerEvent{} = event) do
+    payload_json = Contracts.canonical_json(event.payload)
+    quorum_ref_json = Contracts.canonical_json(event.quorum_ref)
+
+    sql = """
+    INSERT INTO ledger_events (
+      sequence, event_id, event_type, core_node_id,
+      consensus_decision_id, consensus_status, quorum_ref,
+      causation_id, correlation_id, subject, source_app,
+      occurred_at, observed_at, persisted_at,
+      format_version, schema_id, schema_version,
+      payload, payload_hash, previous_event_hash, event_hash,
+      signature_version, signature
+    ) VALUES (
+      ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+      ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+    )
+    """
+
+    params = [
+      event.sequence,
+      event.event_id,
+      event.event_type,
+      event.core_node_id,
+      event.consensus_decision_id,
+      event.consensus_status,
+      quorum_ref_json,
+      event.causation_id,
+      event.correlation_id,
+      event.subject,
+      event.source_app,
+      event.occurred_at,
+      event.observed_at,
+      event.persisted_at,
+      event.format_version,
+      event.schema_id,
+      event.schema_version,
+      payload_json,
+      event.payload_hash,
+      event.previous_event_hash,
+      event.event_hash,
+      event.signature_version,
+      event.signature
+    ]
+
+    with {:ok, stmt} <- prepare(conn, sql),
+         :ok <- Exqlite.Sqlite3.bind(stmt, params) do
+      result = Exqlite.Sqlite3.step(conn, stmt)
+      Exqlite.Sqlite3.release(conn, stmt)
+
+      case result do
+        :done -> :ok
+        {:error, reason} -> {:error, {:sqlite_query_failed, reason}}
+      end
+    end
+  end
+
   def append_event(db_path, event_map) when is_binary(db_path) and is_map(event_map) do
     append_event(db_path, LedgerEvent.new!(event_map))
   end
@@ -122,6 +200,13 @@ defmodule Eigenforge.Core.LedgerSQLite do
     end
   end
 
+  def query(conn, sql) when is_binary(sql) do
+    case Exqlite.Sqlite3.execute(conn, sql) do
+      :ok -> {:ok, ""}
+      {:error, reason} -> {:error, {:sqlite_query_failed, reason}}
+    end
+  end
+
   @spec query_json(String.t(), String.t()) :: {:ok, term()} | {:error, init_error() | term()}
   def query_json(db_path, sql) when is_binary(db_path) and is_binary(sql) do
     with {:ok, conn} <- open(db_path),
@@ -134,7 +219,16 @@ defmodule Eigenforge.Core.LedgerSQLite do
     end
   end
 
-  @spec tail(String.t()) :: {:ok, map()} | {:error, init_error() | term()}
+  def query_json(conn, sql) when is_binary(sql) do
+    with {:ok, stmt} <- prepare(conn, sql),
+         {:ok, columns} <- Exqlite.Sqlite3.columns(conn, stmt),
+         {:ok, rows} <- Exqlite.Sqlite3.fetch_all(conn, stmt, 500) do
+      Exqlite.Sqlite3.release(conn, stmt)
+      {:ok, Enum.map(rows, &zip_row(columns, &1))}
+    end
+  end
+
+  @spec tail(String.t() | Exqlite.Sqlite3.db()) :: {:ok, map()} | {:error, init_error() | term()}
   def tail(db_path) when is_binary(db_path) do
     case query_json(
            db_path,
@@ -146,10 +240,11 @@ defmodule Eigenforge.Core.LedgerSQLite do
     end
   end
 
-  defp open(db_path) do
-    case Exqlite.Sqlite3.open(db_path) do
-      {:ok, conn} -> {:ok, conn}
-      {:error, reason} -> {:error, {:sqlite_unavailable, reason}}
+  def tail(conn) do
+    case query_json(conn, "SELECT sequence, event_id, event_hash FROM ledger_events ORDER BY sequence DESC LIMIT 1;") do
+      {:ok, [row]} -> {:ok, row}
+      {:ok, []} -> {:error, :empty_ledger}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -164,6 +259,13 @@ defmodule Eigenforge.Core.LedgerSQLite do
     columns
     |> Enum.zip(values)
     |> Map.new()
+  end
+
+  defp execute_conn(conn, sql) do
+    case Exqlite.Sqlite3.execute(conn, sql) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:sqlite_query_failed, reason}}
+    end
   end
 
   defp ensure_parent_dir(db_path) do

@@ -1,5 +1,5 @@
 defmodule Eigenforge.TraceTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   @repo_root Path.expand("../../../..", __DIR__)
   @fixtures_dir Path.join(@repo_root, "config/simulator_snapshots")
@@ -19,6 +19,7 @@ defmodule Eigenforge.TraceTest do
 
     assert [%{"requested_state" => "on"}] = trace["command_envelopes"]
     assert [%{"status" => "confirmed_changed", "observed_state" => "on"}] = trace["after_actions"]
+
     assert_event_types(trace, [
       "reasoner_outcome_recorded",
       "capability_check_recorded",
@@ -26,6 +27,7 @@ defmodule Eigenforge.TraceTest do
       "command_envelope_issued",
       "after_action_recorded"
     ])
+
     assert_local_sqlite_consensus(trace)
   end
 
@@ -41,10 +43,12 @@ defmodule Eigenforge.TraceTest do
 
     assert trace["command_envelopes"] == []
     assert trace["delivery_receipts"] == []
+
     assert_event_types(trace, [
       "reasoner_outcome_recorded",
       "policy_decision_recorded"
     ])
+
     assert_local_sqlite_consensus(trace)
   end
 
@@ -59,10 +63,12 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "command_envelope") == "not_delivered"
 
     assert trace["command_envelopes"] == []
+
     assert_event_types(trace, [
       "reasoner_outcome_recorded",
       "stale_snapshot_denied"
     ])
+
     assert_local_sqlite_consensus(trace)
   end
 
@@ -72,6 +78,7 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "reasoner_outcome") == "propose_action"
     assert step(trace, "policy_decision") == "allow"
     assert [%{"requested_state" => "off"}] = trace["command_envelopes"]
+
     assert_event_types(trace, [
       "reasoner_outcome_recorded",
       "capability_check_recorded",
@@ -87,6 +94,7 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "reasoner_outcome") == "no_threshold_event"
     assert step(trace, "capability_check") == "not_checked"
     assert step(trace, "policy_decision") == "no_command"
+
     assert_event_types(trace, [
       "reasoner_outcome_recorded",
       "policy_decision_recorded"
@@ -98,6 +106,7 @@ defmodule Eigenforge.TraceTest do
 
     assert step(trace, "capability_check") == "not_checked"
     assert step(trace, "policy_decision") == "deny_stale_snapshot"
+
     assert_event_types(trace, [
       "reasoner_outcome_recorded",
       "stale_snapshot_denied"
@@ -115,6 +124,7 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "reasoner_outcome") == "no_threshold_event"
     assert step(trace, "capability_check") == "not_checked"
     assert step(trace, "policy_decision") == "no_command"
+
     assert_event_types(trace, [
       "reasoner_outcome_recorded",
       "policy_decision_recorded"
@@ -129,6 +139,7 @@ defmodule Eigenforge.TraceTest do
 
   test "verify_file fails for tampered golden traces" do
     golden = Path.join(@golden_dir, "co2_high_fan_off.json")
+
     tampered =
       Path.join(
         System.tmp_dir!(),
@@ -164,6 +175,7 @@ defmodule Eigenforge.TraceTest do
 
   test "snapshot hash changes when receive ordering fields change" do
     first_trace = run_fixture!(base_fixture())
+
     second_trace =
       run_fixture!(%{
         base_fixture()
@@ -176,6 +188,21 @@ defmodule Eigenforge.TraceTest do
       })
 
     assert snapshot_hash(first_trace) != snapshot_hash(second_trace)
+  end
+
+  test "trace run can use a non-default core node id" do
+    fixture = base_fixture()
+
+    core_a_trace = run_fixture!(fixture)
+    core_b_trace = run_fixture!(fixture, core_node_id: "core_b")
+
+    assert core_a_trace["core_node_id"] == "core_a"
+    assert core_b_trace["core_node_id"] == "core_b"
+
+    assert hd(core_a_trace["command_envelopes"])["idempotency_key"] !=
+             hd(core_b_trace["command_envelopes"])["idempotency_key"]
+
+    assert_local_sqlite_consensus(core_b_trace, "core_b")
   end
 
   test "stale observe-only sensors do not block a fresh CO2 fan command" do
@@ -194,6 +221,7 @@ defmodule Eigenforge.TraceTest do
     assert step(trace, "policy_decision") == "allow"
     assert step(trace, "command_envelope") == "issued"
     assert step(trace, "capability_check") == "allow"
+
     assert_event_types(trace, [
       "reasoner_outcome_recorded",
       "capability_check_recorded",
@@ -237,8 +265,8 @@ defmodule Eigenforge.TraceTest do
     trace
   end
 
-  defp run_fixture!(fixture) do
-    assert {:ok, trace} = Eigenforge.Trace.run(fixture, "inline-fixture")
+  defp run_fixture!(fixture, opts \\ []) do
+    assert {:ok, trace} = Eigenforge.Trace.run(fixture, "inline-fixture", opts)
     trace
   end
 
@@ -308,8 +336,8 @@ defmodule Eigenforge.TraceTest do
     |> Map.fetch!("result")
   end
 
-  defp assert_local_sqlite_consensus(trace) do
-    assert trace["core_node_id"] == "core_a"
+  defp assert_local_sqlite_consensus(trace, core_node_id \\ "core_a") do
+    assert trace["core_node_id"] == core_node_id
     assert trace["ledger_backend"] == "local_sqlite"
     assert trace["consensus_status"] == "single_core_finalized"
     assert trace["verification"]["local_ledger_committed"]
@@ -323,7 +351,7 @@ defmodule Eigenforge.TraceTest do
     assert [_one_consensus_decision] = consensus_ids
 
     assert Enum.all?(trace["ledger_events"], fn event ->
-             event["core_node_id"] == "core_a" and
+             event["core_node_id"] == core_node_id and
                event["consensus_status"] == "single_core_finalized" and
                event["quorum_ref"] == %{}
            end)

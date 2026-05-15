@@ -86,12 +86,25 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
 
     @impl true
     def connect(_url, _token) do
-      {:ok, :fake_conn, %{
-        "sensor.placeholder_co2" => %{"entity_id" => "sensor.placeholder_co2", "entity_class" => "switch"},
-        "sensor.placeholder_humidity" => %{"entity_id" => "sensor.placeholder_humidity", "entity_class" => "sensor"},
-        "sensor.placeholder_temperature" => %{"entity_id" => "sensor.placeholder_temperature", "entity_class" => "sensor"},
-        "switch.placeholder_fan" => %{"entity_id" => "switch.placeholder_fan", "entity_class" => "switch"}
-      }}
+      {:ok, :fake_conn,
+       %{
+         "sensor.placeholder_co2" => %{
+           "entity_id" => "sensor.placeholder_co2",
+           "entity_class" => "switch"
+         },
+         "sensor.placeholder_humidity" => %{
+           "entity_id" => "sensor.placeholder_humidity",
+           "entity_class" => "sensor"
+         },
+         "sensor.placeholder_temperature" => %{
+           "entity_id" => "sensor.placeholder_temperature",
+           "entity_class" => "sensor"
+         },
+         "switch.placeholder_fan" => %{
+           "entity_id" => "switch.placeholder_fan",
+           "entity_class" => "switch"
+         }
+       }}
     end
 
     @impl true
@@ -143,15 +156,29 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
   setup do
     Process.delete(:ha_connect_attempts)
 
-    dir = Path.join(System.tmp_dir!(), "eigenforge-ha-client-#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(System.tmp_dir!(), "eigenforge-ha-client-#{System.unique_integer([:positive])}")
+
     db_path = Path.join(dir, "core.sqlite3")
     log_path = Path.join(dir, "io_fault_status.log")
-    pubsub_registry = Module.concat(__MODULE__, "CoreRegistry#{System.unique_integer([:positive])}")
-    mailbox_registry = Module.concat(__MODULE__, "MailboxRegistry#{System.unique_integer([:positive])}")
-    fault_registry = Module.concat(__MODULE__, "FaultRegistry#{System.unique_integer([:positive])}")
-    receipt_store_name = Module.concat(__MODULE__, "ReceiptStore#{System.unique_integer([:positive])}")
-    command_store_name = Module.concat(__MODULE__, "CommandStore#{System.unique_integer([:positive])}")
-    io_fault_status_name = Module.concat(__MODULE__, "IoFaultStatus#{System.unique_integer([:positive])}")
+
+    pubsub_registry =
+      Module.concat(__MODULE__, "CoreRegistry#{System.unique_integer([:positive])}")
+
+    mailbox_registry =
+      Module.concat(__MODULE__, "MailboxRegistry#{System.unique_integer([:positive])}")
+
+    fault_registry =
+      Module.concat(__MODULE__, "FaultRegistry#{System.unique_integer([:positive])}")
+
+    receipt_store_name =
+      Module.concat(__MODULE__, "ReceiptStore#{System.unique_integer([:positive])}")
+
+    command_store_name =
+      Module.concat(__MODULE__, "CommandStore#{System.unique_integer([:positive])}")
+
+    io_fault_status_name =
+      Module.concat(__MODULE__, "IoFaultStatus#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(dir)
     start_supervised!({Registry, keys: :duplicate, name: pubsub_registry})
@@ -190,8 +217,10 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
 
     %{
       db_path: db_path,
+      log_path: log_path,
       pubsub_registry: pubsub_registry,
       mailbox_registry: mailbox_registry,
+      fault_registry: fault_registry,
       io_fault_status: io_fault_status,
       receipt_store: receipt_store,
       command_store: command_store,
@@ -213,7 +242,8 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     command_store: command_store,
     entity_ids: entity_ids
   } do
-    assert {:ok, _} = PubSub.subscribe("io_state:room:placeholder", registry_name: pubsub_registry)
+    assert {:ok, _} =
+             PubSub.subscribe("io_state:room:placeholder", registry_name: pubsub_registry)
 
     start_supervised!(
       {HomeAssistantClient,
@@ -236,7 +266,9 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     assert snapshot.co2_ppm == 1200
 
     assert :ok =
-             CommandPublisher.publish("commands:io", signed_command("cmd-1", "actuator:fan", "on"),
+             CommandPublisher.publish(
+               "commands:io",
+               signed_command("cmd-1", "actuator:fan", "on"),
                registry_name: mailbox_registry,
                receipt_store: receipt_store,
                ledger_sequence: 5,
@@ -244,10 +276,16 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
                decision_event_id: "event-4"
              )
 
-    assert_receive {:transport_command, %{"service" => "turn_on", "entity_id" => "switch.placeholder_fan"}, %{accepted: true}}, 1_500
+    assert_receive {:transport_command,
+                    %{"service" => "turn_on", "entity_id" => "switch.placeholder_fan"},
+                    %{accepted: true}},
+                   1_500
 
     assert {:ok, rows} =
-             LedgerSQLite.query_json(db_path, "SELECT event_type FROM ledger_events ORDER BY sequence ASC;")
+             LedgerSQLite.query_json(
+               db_path,
+               "SELECT event_type FROM ledger_events ORDER BY sequence ASC;"
+             )
 
     event_types = Enum.map(rows, & &1["event_type"])
     assert "connection_status_observed" in event_types
@@ -280,7 +318,9 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     Process.sleep(100)
 
     assert :ok =
-             CommandPublisher.publish("commands:io", signed_command("cmd-2", "actuator:fan", "off"),
+             CommandPublisher.publish(
+               "commands:io",
+               signed_command("cmd-2", "actuator:fan", "off"),
                registry_name: mailbox_registry,
                receipt_store: receipt_store,
                ledger_sequence: 6,
@@ -318,7 +358,9 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     )
 
     assert :ok =
-             CommandPublisher.publish("commands:io", signed_command("cmd-3", "actuator:light", "on"),
+             CommandPublisher.publish(
+               "commands:io",
+               signed_command("cmd-3", "actuator:light", "on"),
                registry_name: mailbox_registry,
                receipt_store: receipt_store,
                ledger_sequence: 7,
@@ -332,6 +374,8 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
   test "rejects duplicate idempotency keys after the first accepted execution", %{
     pubsub_registry: pubsub_registry,
     mailbox_registry: mailbox_registry,
+    fault_registry: fault_registry,
+    log_path: log_path,
     io_fault_status: io_fault_status,
     receipt_store: receipt_store,
     command_store: command_store,
@@ -354,6 +398,7 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     )
 
     Process.sleep(1_200)
+    assert {:ok, _} = IoFaultStatus.subscribe(fault_registry)
 
     command = signed_command("cmd-dup", "actuator:fan", "on")
 
@@ -378,6 +423,7 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
              )
 
     refute_receive {:transport_command, _request, %{accepted: true}}, 500
+    assert_fault_logged(log_path, "duplicate_idempotency_key")
     assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-dup")
   end
 
@@ -408,7 +454,9 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     Process.sleep(100)
 
     assert :ok =
-             CommandPublisher.publish("commands:io", signed_command("cmd-fail", "actuator:fan", "on"),
+             CommandPublisher.publish(
+               "commands:io",
+               signed_command("cmd-fail", "actuator:fan", "on"),
                registry_name: mailbox_registry,
                receipt_store: receipt_store,
                ledger_sequence: 10,
@@ -445,7 +493,9 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     )
 
     assert :ok =
-             CommandPublisher.publish("commands:io", signed_command("cmd-down", "actuator:fan", "on"),
+             CommandPublisher.publish(
+               "commands:io",
+               signed_command("cmd-down", "actuator:fan", "on"),
                registry_name: mailbox_registry,
                receipt_store: receipt_store,
                ledger_sequence: 11,
@@ -460,6 +510,7 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
   test "wall-clock jumps do not expire in-flight commands before their monotonic deadline", %{
     pubsub_registry: pubsub_registry,
     mailbox_registry: mailbox_registry,
+    fault_registry: fault_registry,
     io_fault_status: io_fault_status,
     receipt_store: receipt_store,
     command_store: command_store,
@@ -492,6 +543,7 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     )
 
     Process.sleep(1_200)
+    assert {:ok, _} = IoFaultStatus.subscribe(fault_registry)
 
     Agent.update(clock, fn _ ->
       %{
@@ -503,7 +555,9 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     assert :ok =
              CommandPublisher.publish(
                "commands:io",
-               signed_command("cmd-clock", "actuator:fan", "on", expires_at: "2026-05-10T12:00:05.000Z"),
+               signed_command("cmd-clock", "actuator:fan", "on",
+                 expires_at: "2026-05-10T12:00:05.000Z"
+               ),
                registry_name: mailbox_registry,
                receipt_store: receipt_store,
                ledger_sequence: 12,
@@ -522,7 +576,8 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     command_store: command_store,
     entity_ids: entity_ids
   } do
-    assert {:ok, _} = PubSub.subscribe("io_state:room:placeholder", registry_name: pubsub_registry)
+    assert {:ok, _} =
+             PubSub.subscribe("io_state:room:placeholder", registry_name: pubsub_registry)
 
     start_supervised!(
       {HomeAssistantClient,
@@ -548,6 +603,7 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
   test "commands expire after their monotonic deadline even if wall time moves backward", %{
     pubsub_registry: pubsub_registry,
     mailbox_registry: mailbox_registry,
+    log_path: log_path,
     io_fault_status: io_fault_status,
     receipt_store: receipt_store,
     command_store: command_store,
@@ -591,7 +647,9 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     assert :ok =
              CommandPublisher.publish(
                "commands:io",
-               signed_command("cmd-expired", "actuator:fan", "on", expires_at: "2026-05-10T12:00:05.000Z"),
+               signed_command("cmd-expired", "actuator:fan", "on",
+                 expires_at: "2026-05-10T12:00:05.000Z"
+               ),
                registry_name: mailbox_registry,
                receipt_store: receipt_store,
                ledger_sequence: 15,
@@ -600,12 +658,14 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
              )
 
     refute_receive {:transport_command, %{"service" => "turn_on"}, %{accepted: true}}, 500
+    assert_fault_logged(log_path, "command_expired")
     assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-expired")
   end
 
   test "receipts missing committed ledger references are rejected", %{
     pubsub_registry: pubsub_registry,
     mailbox_registry: mailbox_registry,
+    fault_registry: fault_registry,
     io_fault_status: io_fault_status,
     receipt_store: receipt_store,
     command_store: command_store,
@@ -628,6 +688,7 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     )
 
     Process.sleep(1_200)
+    assert {:ok, _} = IoFaultStatus.subscribe(fault_registry)
 
     assert {:ok, receipt} =
              ReceiptStore.store_receipt(
@@ -639,14 +700,24 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
                decision_event_id: "event-4"
              )
 
-    assert :ok = ReceiptStore.mark_phase(receipt_store, receipt.receipt_id, "publish_attempted", %{published_at: receipt.delivered_at})
+    assert :ok =
+             ReceiptStore.mark_phase(receipt_store, receipt.receipt_id, "publish_attempted", %{
+               published_at: receipt.delivered_at
+             })
 
     assert {:ok, entry} = ReceiptStore.fetch(receipt_store, receipt.receipt_id)
     bad_receipt = put_in(entry, ["receipt", "ledger_event_hash"], "")
 
     Registry.dispatch(mailbox_registry, "commands:io", fn entries ->
       Enum.each(entries, fn {pid, _value} ->
-        send(pid, {:mailbox_command, "commands:io", %{"command" => wire_command(signed_command("cmd-bad", "actuator:fan", "on")), "receipt" => bad_receipt["receipt"]}})
+        send(
+          pid,
+          {:mailbox_command, "commands:io",
+           %{
+             "command" => wire_command(signed_command("cmd-bad", "actuator:fan", "on")),
+             "receipt" => bad_receipt["receipt"]
+           }}
+        )
       end)
     end)
 
@@ -657,6 +728,8 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
   test "invalid command signatures and receipt mismatches are rejected before dispatch", %{
     pubsub_registry: pubsub_registry,
     mailbox_registry: mailbox_registry,
+    fault_registry: fault_registry,
+    log_path: log_path,
     io_fault_status: io_fault_status,
     receipt_store: receipt_store,
     command_store: command_store,
@@ -676,9 +749,11 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
          command_execution_store: command_store,
          command_observer: self(),
          transport: ConnectedTransport,
-         name: Module.concat(__MODULE__, "MismatchClient#{System.unique_integer([:positive])}")})
+         name: Module.concat(__MODULE__, "MismatchClient#{System.unique_integer([:positive])}")}
+      )
 
     Process.sleep(100)
+    assert {:ok, _} = IoFaultStatus.subscribe(fault_registry)
 
     command = signed_command("cmd-invalid", "actuator:fan", "on")
 
@@ -700,16 +775,54 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     assert {:ok, entry} = ReceiptStore.fetch(receipt_store, receipt.receipt_id)
 
     bad_command = Map.put(wire_command(command), "signature", "tampered-signature")
-    bad_receipt_command = put_in(entry, ["receipt", "command_id"], "cmd-other")
-    bad_receipt_decision = put_in(entry, ["receipt", "decision_event_id"], "event-other")
 
-    send(client, {:mailbox_command, "commands:io", %{"command" => bad_command, "receipt" => entry["receipt"]}})
-    send(client, {:mailbox_command, "commands:io", %{"command" => wire_command(command), "receipt" => bad_receipt_command["receipt"]}})
-    send(client, {:mailbox_command, "commands:io", %{"command" => wire_command(command), "receipt" => bad_receipt_decision["receipt"]}})
+    bad_receipt_command =
+      entry["receipt"]
+      |> Map.put("command_id", "cmd-other")
+      |> Map.put("signature", "")
+      |> then(
+        &Map.put(
+          &1,
+          "signature",
+          Contracts.sign_hmac(&1, "ha-secret", "eigenforge:v1:delivery_receipt")
+        )
+      )
+
+    bad_receipt_decision =
+      entry["receipt"]
+      |> Map.put("decision_event_id", "event-other")
+      |> Map.put("signature", "")
+      |> then(
+        &Map.put(
+          &1,
+          "signature",
+          Contracts.sign_hmac(&1, "ha-secret", "eigenforge:v1:delivery_receipt")
+        )
+      )
+
+    send(
+      client,
+      {:mailbox_command, "commands:io",
+       %{"command" => bad_command, "receipt" => entry["receipt"]}}
+    )
+
+    send(
+      client,
+      {:mailbox_command, "commands:io",
+       %{"command" => wire_command(command), "receipt" => bad_receipt_command}}
+    )
+
+    send(
+      client,
+      {:mailbox_command, "commands:io",
+       %{"command" => wire_command(command), "receipt" => bad_receipt_decision}}
+    )
 
     refute_receive {:transport_command, _request, _result}, 500
     refute_receive {:transport_command, _request, _result}, 100
     refute_receive {:transport_command, _request, _result}, 100
+
+    assert_fault_logged(log_path, "invalid_command_signature")
 
     assert "publish_attempted" == latest_receipt_phase(receipt_store, "cmd-invalid")
   end
@@ -721,14 +834,19 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     receipt_store: receipt_store,
     entity_ids: entity_ids
   } do
-    command_store_name = Module.concat(__MODULE__, "CorruptCommandStore#{System.unique_integer([:positive])}")
-    path = Path.join(System.tmp_dir!(), "eigenforge-command-store-corrupt-#{System.unique_integer([:positive])}.json")
+    command_store_name =
+      Module.concat(__MODULE__, "CorruptCommandStore#{System.unique_integer([:positive])}")
+
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "eigenforge-command-store-corrupt-#{System.unique_integer([:positive])}.json"
+      )
+
     File.write!(path, ~s({"format_version":"json-canonical-v0","entries":{}}))
 
     corrupt_store =
-      start_supervised!(
-        {CommandExecutionStore, path: path, name: command_store_name}
-      )
+      start_supervised!({CommandExecutionStore, path: path, name: command_store_name})
 
     start_supervised!(
       {HomeAssistantClient,
@@ -743,12 +861,15 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
        command_execution_store: corrupt_store,
        command_observer: self(),
        transport: FlakyTransport,
-       name: Module.concat(__MODULE__, "CorruptStoreClient#{System.unique_integer([:positive])}")})
+       name: Module.concat(__MODULE__, "CorruptStoreClient#{System.unique_integer([:positive])}")}
+    )
 
     Process.sleep(1_200)
 
     assert :ok =
-             CommandPublisher.publish("commands:io", signed_command("cmd-store", "actuator:fan", "on"),
+             CommandPublisher.publish(
+               "commands:io",
+               signed_command("cmd-store", "actuator:fan", "on"),
                registry_name: mailbox_registry,
                receipt_store: receipt_store,
                ledger_sequence: 14,
@@ -784,7 +905,8 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
          command_execution_store: command_store,
          command_observer: self(),
          transport: ConnectedTransport,
-         name: client_name})
+         name: client_name}
+      )
 
     Process.sleep(100)
 
@@ -804,7 +926,8 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     Process.exit(client, :normal)
     Process.sleep(50)
 
-    restarted_name = Module.concat(__MODULE__, "RestartClientReused#{System.unique_integer([:positive])}")
+    restarted_name =
+      Module.concat(__MODULE__, "RestartClientReused#{System.unique_integer([:positive])}")
 
     start_supervised!(
       {HomeAssistantClient,
@@ -819,7 +942,8 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
        command_execution_store: command_store,
        command_observer: self(),
        transport: ConnectedTransport,
-       name: restarted_name})
+       name: restarted_name}
+    )
 
     Process.sleep(100)
 
@@ -861,7 +985,10 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
       signature: ""
     })
     |> then(fn unsigned ->
-      %{unsigned | signature: Contracts.sign_hmac(unsigned, "ha-secret", "eigenforge:v1:command_envelope")}
+      %{
+        unsigned
+        | signature: Contracts.sign_hmac(unsigned, "ha-secret", "eigenforge:v1:command_envelope")
+      }
     end)
   end
 
@@ -874,6 +1001,31 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
         get_in(entry, ["phase_metadata", "receipt_stored_at"])
     end)
     |> Map.fetch!("delivery_phase")
+  end
+
+  defp assert_fault_logged(log_path, fault_type, attempts \\ 100)
+       when is_binary(log_path) and is_binary(fault_type) and attempts >= 0 do
+    case File.read(log_path) do
+      {:ok, body} ->
+        if body =~ fault_type do
+          :ok
+        else
+          if attempts > 0 do
+            Process.sleep(50)
+            assert_fault_logged(log_path, fault_type, attempts - 1)
+          else
+            flunk("expected fault log to include #{inspect(fault_type)}, got: #{body}")
+          end
+        end
+
+      {:error, reason} ->
+        if attempts > 0 do
+          Process.sleep(50)
+          assert_fault_logged(log_path, fault_type, attempts - 1)
+        else
+          flunk("expected fault log to be readable, got: #{inspect(reason)}")
+        end
+    end
   end
 
   defp wire_command(command) do

@@ -8,7 +8,7 @@ type: chore
 priority: 3
 assignee: lispmeister
 ---
-# Add V1 demo script and acceptance walkthrough
+# Add the V1 demo script and acceptance walkthrough
 
 Essence-captured is currently implicit in golden trace acceptance tests. A reproducible 5-10 minute demo script gives a concrete answer to: is the V1 prototype done?
 

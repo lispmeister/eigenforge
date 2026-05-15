@@ -1,6 +1,6 @@
 ---
 id: eig-tx3w
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T00:00:00Z
@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: lispmeister
 ---
-# Wrap ledger append + projection update in a single SQLite transaction (§11)
+# Make ledger append and projection update transactional (§11)
 
 The spec (§11) requires:
 

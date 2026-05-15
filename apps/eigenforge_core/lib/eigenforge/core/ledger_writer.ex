@@ -42,12 +42,15 @@ defmodule Eigenforge.Core.LedgerWriter do
           {:db_path, String.t()}
           | {:core_node_id, String.t()}
           | {:secret, binary()}
+          | {:append_hook, (map() -> any())}
           | {:name, GenServer.name()}
 
   @type state :: %{
           db_path: String.t(),
           core_node_id: String.t(),
-          secret: binary()
+          secret: binary(),
+          conn: Exqlite.Sqlite3.db(),
+          append_hook: (map() -> any()) | nil
         }
 
   @spec start_link(RuntimeConfig.t() | [start_opt()]) :: GenServer.on_start()
@@ -56,6 +59,7 @@ defmodule Eigenforge.Core.LedgerWriter do
       db_path: config.core_db_path,
       core_node_id: config.core_node_id,
       secret: config.hmac_secret,
+      append_hook: nil,
       name: @default_server
     )
   end
@@ -96,11 +100,25 @@ defmodule Eigenforge.Core.LedgerWriter do
          {:ok, core_node_id} <- fetch_option(opts, :core_node_id),
          {:ok, secret} <- fetch_option(opts, :secret),
          :ok <- prepare_ledger(db_path, core_node_id, secret),
-         :ok <- LedgerProjections.rebuild(db_path) do
-      {:ok, %{db_path: db_path, core_node_id: core_node_id, secret: secret}}
+         :ok <- LedgerProjections.rebuild(db_path),
+         {:ok, conn} <- LedgerSQLite.open(db_path) do
+      {:ok,
+       %{
+         db_path: db_path,
+         core_node_id: core_node_id,
+         secret: secret,
+         conn: conn,
+         append_hook: Keyword.get(opts, :append_hook)
+       }}
     else
       {:error, reason} -> {:stop, reason}
     end
+  end
+
+  @impl true
+  def terminate(_reason, %{conn: conn}) do
+    LedgerSQLite.close(conn)
+    :ok
   end
 
   @impl true
@@ -121,16 +139,36 @@ defmodule Eigenforge.Core.LedgerWriter do
   end
 
   defp append_once(attrs, state) do
-    with {:ok, tail} <- LedgerSQLite.tail(state.db_path),
+    conn = state.conn
+
+    with :ok <- LedgerSQLite.begin_immediate(conn),
+         {:ok, tail} <- LedgerSQLite.tail(conn),
          {:ok, event} <- build_event(attrs, tail, state),
-         :ok <- LedgerSQLite.append_event(state.db_path, event),
-         :ok <- LedgerProjections.apply_event(state.db_path, event) do
+         :ok <- LedgerSQLite.append_event(conn, event),
+         :ok <- maybe_run_append_hook(state.append_hook, event),
+         :ok <- LedgerProjections.apply_event(conn, event),
+         :ok <- LedgerSQLite.commit(conn) do
       {:ok, event}
     else
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        _ = LedgerSQLite.rollback(state.conn)
+        {:error, reason}
     end
   rescue
-    error -> {:error, {:invalid_append_request, Exception.message(error)}}
+    error ->
+      _ = LedgerSQLite.rollback(state.conn)
+      {:error, {:invalid_append_request, Exception.message(error)}}
+  end
+
+  defp maybe_run_append_hook(nil, _event), do: :ok
+
+  defp maybe_run_append_hook(hook, event) when is_function(hook, 1) do
+    case hook.(event) do
+      :ok -> :ok
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:append_hook_failed, other}}
+    end
   end
 
   defp build_event(attrs, tail, state) do
@@ -203,7 +241,7 @@ defmodule Eigenforge.Core.LedgerWriter do
       if count == 0 do
         LedgerTooling.ensure_genesis(db_path, core_node_id, secret)
       else
-        :ok
+        LedgerTooling.verify(db_path, core_node_id, secret)
       end
     end
   end

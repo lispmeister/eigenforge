@@ -1,6 +1,6 @@
 ---
 id: eig-ft9k
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T00:00:00Z
@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: lispmeister
 ---
-# Fix: IO publishes wrong fault_type for duplicate_idempotency_key and invalid_command_signature
+# Map IO fault types to command rejection reasons
 
 `HomeAssistantClient.handle_info` for `{:mailbox_command, topic, delivery}` contains:
 

@@ -1,14 +1,14 @@
 ---
 id: eig-sr6h
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 3
+priority: 2
 assignee: lispmeister
 ---
-# Add source_received_seq_fan and source_received_monotonic_ms_fan to latest_room_control_state projection (INV-14)
+# Persist fan receive ordering in latest_room_control_state (INV-14)
 
 `SnapshotSubscriber.pre_command_snapshot` (`snapshot_subscriber.ex:596–597`) reads:
 ```elixir

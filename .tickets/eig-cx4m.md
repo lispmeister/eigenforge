@@ -5,10 +5,10 @@ deps: []
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 4
+priority: 2
 assignee: lispmeister
 ---
-# Extract IO.CommandExecutor from HomeAssistantClient (§2 OTP layout)
+# Extract IO.CommandExecutor from HomeAssistantClient (§2)
 
 The spec (§2) lists `IO.CommandExecutor` as a distinct module. Currently command verification and dispatch logic is embedded in `HomeAssistantClient.verify_and_dispatch/2` and `HomeAssistantClient.dispatch_command/2` (`home_assistant_client.ex:231–339`), coupling command execution to the WebSocket connection process.
 

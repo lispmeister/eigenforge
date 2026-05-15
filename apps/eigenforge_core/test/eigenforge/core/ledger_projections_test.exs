@@ -26,11 +26,14 @@ defmodule Eigenforge.Core.LedgerProjectionsTest do
 
     assert :ok = LedgerSQLite.init(db_path, "core_a")
     assert :ok = insert_genesis(db_path)
+    assert :ok = LedgerProjections.init(db_path)
 
     %{db_path: db_path}
   end
 
-  test "creates projection tables and updates command lifecycle from ledger events", %{db_path: db_path} do
+  test "creates projection tables and updates command lifecycle from ledger events", %{
+    db_path: db_path
+  } do
     assert :ok = LedgerProjections.init(db_path)
 
     events = decision_chain_events()
@@ -125,8 +128,8 @@ defmodule Eigenforge.Core.LedgerProjectionsTest do
         source_entity_ids: %{},
         source_observation_ids: %{},
         source_observed_at: %{},
-        source_received_seq: %{},
-        source_received_monotonic_ms: %{},
+        source_received_seq: %{"fan" => 7},
+        source_received_monotonic_ms: %{"fan" => 11},
         source_status: %{
           "co2" => "fresh",
           "humidity" => "fresh",
@@ -151,6 +154,8 @@ defmodule Eigenforge.Core.LedgerProjectionsTest do
     assert room["fan_state"] == "off"
     assert room["io_mode"] == "simulator"
     assert room["freshness"] == "fresh"
+    assert room["source_received_seq_fan"] == 7
+    assert room["source_received_monotonic_ms_fan"] == 11
     assert room["fan_status"] == "not_yet_observed"
 
     assert {:ok, [%{"count(*)" => 1}]} =

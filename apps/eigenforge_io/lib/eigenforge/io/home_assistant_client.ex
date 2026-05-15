@@ -76,13 +76,15 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       io_fault_status: Keyword.get(opts, :io_fault_status, IoFaultStatus),
       pubsub_registry: Keyword.get(opts, :pubsub_registry, Eigenforge.Core.PubSub.Registry),
       mailbox_registry: mailbox_registry,
-      mailbox_receipt_store: Keyword.get(opts, :mailbox_receipt_store, Eigenforge.Mailbox.ReceiptStore),
+      mailbox_receipt_store:
+        Keyword.get(opts, :mailbox_receipt_store, Eigenforge.Mailbox.ReceiptStore),
       command_execution_store:
         Keyword.get(opts, :command_execution_store, Eigenforge.IO.CommandExecutionStore),
       transport: Keyword.get(opts, :transport, __MODULE__.Transport.Noop),
       command_observer: Keyword.get(opts, :command_observer),
       utc_now: Keyword.get(opts, :utc_now, &DateTime.utc_now/0),
-      monotonic_now_ms: Keyword.get(opts, :monotonic_now_ms, fn -> System.monotonic_time(:millisecond) end),
+      monotonic_now_ms:
+        Keyword.get(opts, :monotonic_now_ms, fn -> System.monotonic_time(:millisecond) end),
       connected?: false,
       physical_control_enabled?: false,
       conn: nil,
@@ -116,7 +118,10 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       {:ok, conn, initial_states} ->
         next_state = %{state | conn: conn, connected?: true}
 
-        case HomeAssistantAdapter.dynamic_validate_entities(initial_states, state.home_assistant.entity_ids) do
+        case HomeAssistantAdapter.dynamic_validate_entities(
+               initial_states,
+               state.home_assistant.entity_ids
+             ) do
           :ok ->
             case publish_snapshot(
                    initial_states,
@@ -128,6 +133,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
                  ) do
               :ok ->
                 _ = record_status(next_state, "connection_up", correlation_id: "ha-connect")
+
                 {:noreply,
                  %{
                    next_state
@@ -137,22 +143,52 @@ defmodule Eigenforge.IO.HomeAssistantClient do
                  }}
 
               {:error, reason} ->
-                _ = record_status(state, "degraded", message: inspect(reason), correlation_id: "ha-connect")
+                _ =
+                  record_status(state, "degraded",
+                    message: inspect(reason),
+                    correlation_id: "ha-connect"
+                  )
+
                 {:noreply, %{next_state | physical_control_enabled?: false}}
             end
 
           {:error, errors} ->
-            _ = record_status(state, "degraded", message: inspect(errors), correlation_id: "ha-connect")
+            _ =
+              record_status(state, "degraded",
+                message: inspect(errors),
+                correlation_id: "ha-connect"
+              )
+
             {:noreply, %{next_state | physical_control_enabled?: false}}
         end
 
       {:error, reason} ->
-        _ = record_status(state, "connection_down", message: inspect(reason), correlation_id: "ha-connect")
-        _ = record_status(state, "reconnecting", message: inspect(reason), correlation_id: "ha-reconnect-#{state.reconnect_attempt + 1}")
-        delay = HomeAssistantAdapter.next_backoff_ms(state.reconnect_attempt, state.ha_reconnect_max_ms)
+        _ =
+          record_status(state, "connection_down",
+            message: inspect(reason),
+            correlation_id: "ha-connect"
+          )
+
+        _ =
+          record_status(state, "reconnecting",
+            message: inspect(reason),
+            correlation_id: "ha-reconnect-#{state.reconnect_attempt + 1}"
+          )
+
+        delay =
+          HomeAssistantAdapter.next_backoff_ms(state.reconnect_attempt, state.ha_reconnect_max_ms)
+
         Process.send_after(self(), :connect, delay)
-        {:noreply, %{state | reconnect_attempt: state.reconnect_attempt + 1, connected?: false, physical_control_enabled?: false, conn: nil}}
-      end
+
+        {:noreply,
+         %{
+           state
+           | reconnect_attempt: state.reconnect_attempt + 1,
+             connected?: false,
+             physical_control_enabled?: false,
+             conn: nil
+         }}
+    end
   end
 
   def handle_info({:home_assistant_transport_snapshot, conn, raw_states}, state)
@@ -183,9 +219,21 @@ defmodule Eigenforge.IO.HomeAssistantClient do
   def handle_info({:home_assistant_transport_closed, conn, reason}, state) do
     next_state =
       if state.conn == conn or state.connected? do
-        _ = record_status(state, "connection_down", message: inspect(reason), correlation_id: "ha-connect")
-        _ = record_status(state, "reconnecting", message: inspect(reason), correlation_id: "ha-reconnect-#{state.reconnect_attempt + 1}")
-        delay = HomeAssistantAdapter.next_backoff_ms(state.reconnect_attempt, state.ha_reconnect_max_ms)
+        _ =
+          record_status(state, "connection_down",
+            message: inspect(reason),
+            correlation_id: "ha-connect"
+          )
+
+        _ =
+          record_status(state, "reconnecting",
+            message: inspect(reason),
+            correlation_id: "ha-reconnect-#{state.reconnect_attempt + 1}"
+          )
+
+        delay =
+          HomeAssistantAdapter.next_backoff_ms(state.reconnect_attempt, state.ha_reconnect_max_ms)
+
         Process.send_after(self(), :connect, delay)
 
         %{
@@ -205,10 +253,12 @@ defmodule Eigenforge.IO.HomeAssistantClient do
   def handle_info({:mailbox_command, @commands_topic, delivery}, state) when is_map(delivery) do
     next_state =
       case verify_and_dispatch(delivery, state) do
-        {:ok, _result} -> state
+        {:ok, _result} ->
+          state
+
         {:error, reason} ->
           command = delivery["command"] || %{}
-          fault_type = if reason == :command_expired, do: "command_expired", else: "adapter_execution_failed"
+          fault_type = fault_type_for_reason(reason)
           _ = record_fault(state, fault_type, reason, command)
           state
       end
@@ -245,14 +295,25 @@ defmodule Eigenforge.IO.HomeAssistantClient do
     end
   end
 
-  defp verify_and_dispatch(command, state) when is_map(command), do: dispatch_command(command, state)
+  defp verify_and_dispatch(command, state) when is_map(command),
+    do: dispatch_command(command, state)
 
   defp verify_delivery(command, receipt, state) do
     cond do
-      not valid_signature?(command, command["signature"], state.hmac_secret, "eigenforge:v1:command_envelope") ->
+      not valid_signature?(
+        command,
+        command["signature"],
+        state.hmac_secret,
+        "eigenforge:v1:command_envelope"
+      ) ->
         {:error, :invalid_command_signature}
 
-      not valid_signature?(receipt, receipt["signature"], state.hmac_secret, "eigenforge:v1:delivery_receipt") ->
+      not valid_signature?(
+        receipt,
+        receipt["signature"],
+        state.hmac_secret,
+        "eigenforge:v1:delivery_receipt"
+      ) ->
         {:error, :invalid_delivery_receipt_signature}
 
       receipt["command_id"] != command["command_id"] ->
@@ -285,9 +346,16 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       normalized_at: Map.get(opts_map, :normalized_at, timestamp(state))
     ]
 
-    case HomeAssistantAdapter.normalize_snapshot(state.home_assistant.entity_ids, raw_states, normalize_opts) do
+    case HomeAssistantAdapter.normalize_snapshot(
+           state.home_assistant.entity_ids,
+           raw_states,
+           normalize_opts
+         ) do
       {:ok, snapshot} ->
-        PubSub.publish("io_state:room:#{state.room_id}", snapshot, registry_name: state.pubsub_registry)
+        PubSub.publish("io_state:room:#{state.room_id}", snapshot,
+          registry_name: state.pubsub_registry
+        )
+
         :ok
 
       {:error, reason} ->
@@ -301,7 +369,10 @@ defmodule Eigenforge.IO.HomeAssistantClient do
     ActuatorStub.execute(target, requested_state)
   end
 
-  defp dispatch_command(%{"target" => "actuator:fan", "requested_state" => requested_state}, state) do
+  defp dispatch_command(
+         %{"target" => "actuator:fan", "requested_state" => requested_state},
+         state
+       ) do
     cond do
       not state.connected? ->
         {:error, :not_connected}
@@ -316,7 +387,11 @@ defmodule Eigenforge.IO.HomeAssistantClient do
         {:error, :duplicate_idempotency_key}
 
       true ->
-        with {:ok, request} <- HomeAssistantAdapter.command_request(state.home_assistant.entity_ids.fan, requested_state),
+        with {:ok, request} <-
+               HomeAssistantAdapter.command_request(
+                 state.home_assistant.entity_ids.fan,
+                 requested_state
+               ),
              {:ok, result} <- state.transport.command(state.conn, request),
              :ok <-
                CommandExecutionStore.record(state.command_execution_store, %{
@@ -335,7 +410,9 @@ defmodule Eigenforge.IO.HomeAssistantClient do
     end
   end
 
-  defp dispatch_command(%{"target" => target}, _state), do: {:error, {:unsupported_target, target}}
+  defp dispatch_command(%{"target" => target}, _state),
+    do: {:error, {:unsupported_target, target}}
+
   defp dispatch_command(_command, _state), do: {:error, :invalid_command}
 
   defp record_status(state, fault_type, attrs) do
@@ -365,8 +442,29 @@ defmodule Eigenforge.IO.HomeAssistantClient do
     })
   end
 
+  defp fault_type_for_reason(:command_expired), do: "command_expired"
+  defp fault_type_for_reason(:duplicate_idempotency_key), do: "duplicate_idempotency_key"
+  defp fault_type_for_reason(:invalid_command_signature), do: "invalid_command_signature"
+
+  defp fault_type_for_reason(:invalid_delivery_receipt_signature),
+    do: "invalid_delivery_receipt_signature"
+
+  defp fault_type_for_reason(:receipt_command_mismatch), do: "receipt_command_mismatch"
+  defp fault_type_for_reason(:receipt_decision_mismatch), do: "receipt_decision_mismatch"
+
+  defp fault_type_for_reason(:missing_committed_ledger_reference),
+    do: "missing_committed_ledger_reference"
+
+  defp fault_type_for_reason(:not_connected), do: "not_connected"
+  defp fault_type_for_reason(:physical_control_disabled), do: "physical_control_disabled"
+  defp fault_type_for_reason({:unsupported_target, target}), do: "unsupported_target:#{target}"
+  defp fault_type_for_reason(:invalid_command), do: "invalid_command"
+  defp fault_type_for_reason(_reason), do: "adapter_execution_failed"
+
   defp maybe_notify_command_observer(nil, _request, _result), do: :ok
-  defp maybe_notify_command_observer(pid, request, result) when is_pid(pid), do: send(pid, {:transport_command, request, result})
+
+  defp maybe_notify_command_observer(pid, request, result) when is_pid(pid),
+    do: send(pid, {:transport_command, request, result})
 
   defp active_room_id(config) do
     case SignedConfig.load_device_inventory(config) do
@@ -404,6 +502,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
   defp current_utc(state), do: state.utc_now.()
   defp current_monotonic_ms(state), do: state.monotonic_now_ms.()
   defp blank?(value), do: value in [nil, ""]
+
   defp command_expired?(command, state) do
     case monotonic_deadline_ms(command["expires_at"], state) do
       deadline_ms when is_integer(deadline_ms) -> current_monotonic_ms(state) > deadline_ms
@@ -419,7 +518,8 @@ defmodule Eigenforge.IO.HomeAssistantClient do
 
   defmodule Transport do
     @callback connect(String.t(), String.t()) :: {:ok, term(), map()} | {:error, term()}
-    @callback connect(String.t(), String.t(), keyword()) :: {:ok, term(), map()} | {:error, term()}
+    @callback connect(String.t(), String.t(), keyword()) ::
+                {:ok, term(), map()} | {:error, term()}
     @callback command(term(), map()) :: {:ok, term()} | {:error, term()}
 
     defmodule Noop do

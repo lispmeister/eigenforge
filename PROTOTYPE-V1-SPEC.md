@@ -210,7 +210,8 @@ and `mix eigenforge.trace.verify`. Failure messages cite invariant IDs.
 
 - **INV-01** *(§9)*: No command envelope is delivered to IO before the corresponding
   `command_envelope_issued` ledger event is durably committed in the local SQLite
-  ledger.
+  ledger. In V2 IO-as-Judge mode: IO never executes without a quorum certificate
+  attached to the after-action event.
 - **INV-02** *(§9)*: IO executes at most one adapter action per `idempotency_key`.
   Duplicate deliveries of the same `idempotency_key` are rejected without adapter
   execution.
@@ -1321,6 +1322,9 @@ The stale CO2 path has exactly one ownership sequence:
 No other component may independently write a second stale-deny decision for the
 same snapshot and correlation id.
 
+In V2 the OODA loop ends with a signed proposal sent to eigenforge_mailbox; the
+consensus/finalization boundary now lives inside eigenforge_io.
+
 ## 8. Capabilities And Policy
 
 Capabilities are static signed grants loaded at startup. V1 grant revocation,
@@ -1602,14 +1606,11 @@ create the delivery receipt. It must not validate signatures, evaluate policy,
 authorize execution, change payload fields, enrich command semantics, or mutate
 the command envelope.
 
-**Receipt store evaluation note (eig-defb).** Mailbox currently owns a second
-SQLite persistence boundary: a signed manifest, a phase-tracked delivery receipt
-store, restart recovery, and projection rebuild. An alternative is to emit
-`delivery_receipt_recorded` ledger events through the core ledger writer,
-collapsing to one persistence boundary. The trade-off is tighter mailbox–core
-coupling and implications for V2 multi-core delivery routing. This design
-question is under evaluation; the chosen approach will be reflected in a spec
-update and implementation ticket before mailbox storage grows further.
+V1 keeps delivery receipts in the mailbox-owned signed receipt store. The
+mailbox receipt store is the durable delivery journal for command delivery
+metadata, and core does not absorb that persistence boundary in V1. This keeps
+mailbox recovery and redelivery mechanical while preserving the V2 delivery
+routing boundary.
 
 After the corresponding ledger event is committed, the mailbox attaches a
 signed delivery receipt to command delivery. The receipt is mechanical delivery
@@ -1739,6 +1740,17 @@ terminally resolve every pending command for a room/target/effect before it may
 issue an equivalent new physical command. Recovery may record `timed_out`,
 `state_mismatch`, or a confirming after-action from fresh post-delivery
 observations, but it must not silently abandon pending work and command again.
+
+### V2 IO-as-Judge Mode
+
+In V2 IO-as-Judge mode, cores no longer emit command_envelopes. They emit
+signed_proposal messages containing the normalized action/no-action,
+idempotency_key, and vote signature. IO becomes the sole issuer of actuator
+commands. IO collects proposals from all three cores, performs 2-of-3 majority
+voting, and — upon reaching quorum — executes the actuator command at most once
+using the idempotency_key. IO then publishes a single after-action event with
+the quorum evidence attached. Each core appends a quorum_finalized ledger event
+referencing the vote evidence after observing IO's after-action publication.
 
 ## 10. After-Action Observation
 
@@ -1912,6 +1924,14 @@ decision-chain events: `reasoner_outcome_recorded`,
 `connection_status_observed`, `io_fault_observed`, and `node_fault_observed`
 unless those events are explicitly attached to a decision correlation.
 `quorum_ref` is `{}` in V1.
+
+`stale_snapshot_denied` uses the same `PolicyDecision` payload contract as
+`policy_decision_recorded`. It carries the same required fields and schema:
+`format_version`, `schema_id`, `schema_version`, `policy_decision_id`,
+`snapshot_id`, `snapshot_hash`, `reasoner_outcome_id`, `subject`, `target`,
+`action`, `scope`, `requested_state`, `decision`, `capability_grant_id`,
+`capability_status`, `reason`, `decided_at`, and `metadata`. The `decision`
+field is `deny_stale_snapshot`.
 
 Routine normalized snapshots are not ledger events. Durable events may include
 snapshot summaries, `snapshot_id`, `snapshot_seq`, and `snapshot_hash` when a
@@ -2139,8 +2159,8 @@ tables instead of treating notification payloads as authoritative history.
 
 This section is V2 compatibility guidance, not V1 executable scope. V1 code
 must preserve the V1 fields and persistence boundaries that make these rules
-possible later, but V1 tickets must not implement quorum, catch-up, rotating
-finalizers, or split-brain repair unless a later spec promotes them into scope.
+possible later, but V1 tickets must not implement quorum, catch-up, IO-as-judge
+finalization, or split-brain repair unless a later spec promotes them into scope.
 
 V2 quorum decisions are durable only after a node has verified quorum evidence
 and committed the finalized event chain to its own local ledger. A quorum
@@ -2154,7 +2174,7 @@ proposed_action_or_no_action
 supporting_core_node_ids
 supporting_vote_ids
 supporting_vote_hashes
-finalizer_core_node_id
+io_node_id
 finalized_at
 ```
 
@@ -2178,7 +2198,10 @@ Split-brain safety rules:
   `idempotency_key`, verification fails and IO must reject any later duplicate
   command envelope;
 - local ledger sequence numbers are node-local and must not be compared across
-  nodes as global order.
+  nodes as global order;
+- IO enforces the 2-of-3 rule: if fewer than two valid proposals arrive for a
+  given `consensus_decision_id`, IO logs a fault and takes no action; cores
+  remain proposers only and never issue actuator commands directly.
 
 ### Verification
 
@@ -2400,9 +2423,11 @@ The exact helper must live in shared test/trace code so trace generation and
 trace verification agree.
 
 The runner must make V2 migration straightforward: later traces can replace
-the single core decision step with three ordered core proposals, 2-of-3 voting,
-a rotating finalizer, and one final command envelope while preserving the same
-fixture-to-local-ledger verification shape.
+the single core decision step with three ordered core proposals, IO-as-judge
+2-of-3 voting, and one IO-executed command with quorum evidence attached,
+while preserving the same fixture-to-local-ledger verification shape. The
+fault-injection rig must prove that killing any single core still produces
+correct actuator change and identical ledger entries on surviving nodes.
 
 ### Golden Trace Acceptance Tests
 
@@ -2566,33 +2591,38 @@ non-fan actuator stubs
 
 ## 14. Deferred V2/V3 Work
 
-V2 adds three-core voting and quorum:
+V2 adds three-core voting and quorum with IO as the judge:
 
 - three core nodes A/B/C;
 - one local SQLite decision ledger per core node;
 - ordered identical snapshots;
 - 2-of-3 voting over normalized actions/no-actions;
-- rotating finalizer;
-- single command envelope issuance;
-- IO execution at most once;
+- IO-as-judge (eigenforge_io performs 2-of-3 voting and executes);
+- single actuator command issuance by IO upon reaching quorum;
+- IO execution at most once per idempotency_key;
 - quorum catch-up after node restart or network partition;
 - fault-injection test rig that kills, restarts, delays, or partitions core
-  nodes.
+  nodes and proves correct actuator execution with identical ledger entries on
+  surviving nodes.
 
-V2 persistence should move final command issuance to the rotating finalizer
-after quorum. Each core node should sign its proposal/vote. After quorum, each
-participating node persists the finalized consensus decision and supporting
-vote references to its own local SQLite ledger. The finalizer must persist the
-finalized decision locally before issuing the single command envelope. IO must
-reject command envelopes that do not reference a finalized decision and quorum
-evidence.
+V2 moves the finalization/judge boundary entirely into eigenforge_io. Cores
+only emit signed proposals. IO performs 2-of-3 voting and executes directly.
+Each core node signs its proposal/vote. IO collects proposals, verifies
+signatures, and — upon reaching quorum — executes the actuator at most once
+using the idempotency_key. IO then publishes a single after-action event with
+quorum evidence. Each participating core node persists the finalized consensus
+decision and supporting vote references to its own local SQLite ledger after
+observing IO's quorum-finalized after-action event. IO must refuse execution
+if fewer than two valid signed proposals arrive for a given
+consensus_decision_id.
 
 Network split behavior is part of the V2 acceptance bar:
 
-- a 2-of-3 side can continue finalizing actions;
-- a 1-of-3 side cannot finalize or command actuators;
+- a 2-of-3 side can continue submitting proposals; IO can reach quorum and act;
+- a 1-of-3 side cannot reach quorum; IO refuses to act without two valid
+  proposals;
 - healed nodes append local catch-up evidence for signed finalized decisions
-  before becoming eligible finalizers again;
+  before resuming proposal submission;
 - conflicting finalized records for the same `consensus_decision_id`,
   `correlation_id`, or `idempotency_key` fail verification.
 

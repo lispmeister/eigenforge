@@ -15,8 +15,19 @@ defmodule Eigenforge.Core.LedgerProjections do
 
   @spec init(String.t()) :: :ok | {:error, term()}
   def init(db_path) when is_binary(db_path) do
-    case LedgerSQLite.query(db_path, init_sql()) do
-      {:ok, _} -> :ok
+    with {:ok, _} <- LedgerSQLite.query(db_path, init_sql()),
+         :ok <- ensure_room_state_columns(db_path) do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def init(conn) do
+    with {:ok, _} <- LedgerSQLite.query(conn, init_sql()),
+         :ok <- ensure_room_state_columns(conn) do
+      :ok
+    else
       {:error, reason} -> {:error, reason}
     end
   end
@@ -29,7 +40,8 @@ defmodule Eigenforge.Core.LedgerProjections do
              db_path,
              "DELETE FROM latest_room_control_state; DELETE FROM recent_control_chains;"
            ),
-         {:ok, rows} <- LedgerSQLite.query_json(db_path, "SELECT * FROM ledger_events ORDER BY sequence ASC;"),
+         {:ok, rows} <-
+           LedgerSQLite.query_json(db_path, "SELECT * FROM ledger_events ORDER BY sequence ASC;"),
          :ok <- replay_rows(db_path, rows) do
       :ok
     end
@@ -41,9 +53,21 @@ defmodule Eigenforge.Core.LedgerProjections do
     correlation_id = fetch_field(event, :correlation_id)
     event_type = fetch_field(event, :event_type)
 
-    with :ok <- init(db_path),
-         {:ok, chain} <- upsert_chain(db_path, event, payload, correlation_id, event_type),
+    # init/1 is performed once at startup or rebuild time; per-event table creation is redundant.
+    with {:ok, chain} <- upsert_chain(db_path, event, payload, correlation_id, event_type),
          :ok <- maybe_upsert_room_state(db_path, event, payload, chain, event_type) do
+      :ok
+    end
+  end
+
+  def apply_event(conn, %LedgerEvent{} = event) do
+    payload = normalize_payload(event.payload)
+    correlation_id = fetch_field(event, :correlation_id)
+    event_type = fetch_field(event, :event_type)
+
+    # init/1 is performed once at startup or rebuild time; per-event table creation is redundant.
+    with {:ok, chain} <- upsert_chain(conn, event, payload, correlation_id, event_type),
+         :ok <- maybe_upsert_room_state(conn, event, payload, chain, event_type) do
       :ok
     end
   end
@@ -54,7 +78,8 @@ defmodule Eigenforge.Core.LedgerProjections do
     |> then(&apply_event(db_path, &1))
   end
 
-  @spec observe_snapshot(String.t(), NormalizedSnapshot.t() | map(), keyword()) :: :ok | {:error, term()}
+  @spec observe_snapshot(String.t(), NormalizedSnapshot.t() | map(), keyword()) ::
+          :ok | {:error, term()}
   def observe_snapshot(db_path, snapshot, opts \\ [])
 
   def observe_snapshot(db_path, %NormalizedSnapshot{} = snapshot, opts) when is_binary(db_path) do
@@ -80,6 +105,10 @@ defmodule Eigenforge.Core.LedgerProjections do
           "fan_state" => snapshot["fan_state"],
           "io_mode" => Keyword.get(opts, :io_mode, existing["io_mode"]),
           "freshness" => snapshot["freshness"],
+          "source_received_seq_fan" =>
+            nested_receive_value(snapshot, "source_received_seq", "fan"),
+          "source_received_monotonic_ms_fan" =>
+            nested_receive_value(snapshot, "source_received_monotonic_ms", "fan"),
           "co2_status" => nested_status(snapshot, "co2"),
           "humidity_status" => nested_status(snapshot, "humidity"),
           "temperature_status" => nested_status(snapshot, "temperature"),
@@ -102,6 +131,32 @@ defmodule Eigenforge.Core.LedgerProjections do
     case apply_event(db_path, row) do
       :ok -> replay_rows(db_path, rest)
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_room_state_columns(target) do
+    required_columns = [
+      {"source_received_seq_fan", "INTEGER"},
+      {"source_received_monotonic_ms_fan", "INTEGER"}
+    ]
+
+    with {:ok, rows} <-
+           LedgerSQLite.query_json(target, "PRAGMA table_info(latest_room_control_state);") do
+      existing = MapSet.new(Enum.map(rows, & &1["name"]))
+
+      Enum.reduce_while(required_columns, :ok, fn {column, type}, :ok ->
+        if MapSet.member?(existing, column) do
+          {:cont, :ok}
+        else
+          case LedgerSQLite.query(
+                 target,
+                 "ALTER TABLE latest_room_control_state ADD COLUMN #{column} #{type};"
+               ) do
+            {:ok, _} -> {:cont, :ok}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end
+      end)
     end
   end
 
@@ -151,7 +206,8 @@ defmodule Eigenforge.Core.LedgerProjections do
         "latest_event_type" => event_type,
         "snapshot_id" => payload["snapshot_id"] || existing["snapshot_id"],
         "snapshot_hash" => payload["snapshot_hash"] || existing["snapshot_hash"],
-        "reasoner_outcome_id" => payload["reasoner_outcome_id"] || existing["reasoner_outcome_id"],
+        "reasoner_outcome_id" =>
+          payload["reasoner_outcome_id"] || existing["reasoner_outcome_id"],
         "reasoner_outcome" => reasoner_outcome_for_event(event_type, payload, existing),
         "policy_decision_id" => payload["policy_decision_id"] || existing["policy_decision_id"],
         "policy_decision" => policy_decision_for_event(event_type, payload, existing),
@@ -186,7 +242,8 @@ defmodule Eigenforge.Core.LedgerProjections do
           "latest_policy_decision_id" =>
             chain["policy_decision_id"] || existing["latest_policy_decision_id"],
           "latest_command_id" => latest_command_for_event(event_type, payload, existing),
-          "latest_after_action_id" => latest_after_action_for_event(event_type, payload, existing),
+          "latest_after_action_id" =>
+            latest_after_action_for_event(event_type, payload, existing),
           "pending_command_id" => pending_command_for_event(event_type, payload, existing),
           "pending_effect_key" => pending_effect_for_event(event_type, payload, existing),
           "command_lifecycle" => command_lifecycle_for_event(event_type, payload, existing),
@@ -271,7 +328,8 @@ defmodule Eigenforge.Core.LedgerProjections do
       humidity_basis_points, temperature_millicelsius, fan_state, io_mode,
       connection_status, latest_reasoner_outcome_id, latest_policy_decision_id,
       latest_command_id, latest_after_action_id, pending_command_id,
-      pending_effect_key, freshness, co2_status, humidity_status,
+      pending_effect_key, freshness, source_received_seq_fan, source_received_monotonic_ms_fan,
+      co2_status, humidity_status,
       temperature_status, fan_status, command_lifecycle, updated_at
     ) VALUES (
       #{sql_string(row["room_id"])},
@@ -290,6 +348,8 @@ defmodule Eigenforge.Core.LedgerProjections do
       #{sql_nullable(row["pending_command_id"])},
       #{sql_nullable(row["pending_effect_key"])},
       #{sql_nullable(row["freshness"])},
+      #{sql_nullable_int(row["source_received_seq_fan"])},
+      #{sql_nullable_int(row["source_received_monotonic_ms_fan"])},
       #{sql_nullable(row["co2_status"])},
       #{sql_nullable(row["humidity_status"])},
       #{sql_nullable(row["temperature_status"])},
@@ -313,6 +373,8 @@ defmodule Eigenforge.Core.LedgerProjections do
       pending_command_id = excluded.pending_command_id,
       pending_effect_key = excluded.pending_effect_key,
       freshness = excluded.freshness,
+      source_received_seq_fan = excluded.source_received_seq_fan,
+      source_received_monotonic_ms_fan = excluded.source_received_monotonic_ms_fan,
       co2_status = excluded.co2_status,
       humidity_status = excluded.humidity_status,
       temperature_status = excluded.temperature_status,
@@ -346,6 +408,8 @@ defmodule Eigenforge.Core.LedgerProjections do
       pending_command_id TEXT,
       pending_effect_key TEXT,
       freshness TEXT,
+      source_received_seq_fan INTEGER,
+      source_received_monotonic_ms_fan INTEGER,
       co2_status TEXT,
       humidity_status TEXT,
       temperature_status TEXT,
@@ -382,49 +446,95 @@ defmodule Eigenforge.Core.LedgerProjections do
   defp parse_room_scope("room:" <> room_id), do: room_id
   defp parse_room_scope(_value), do: nil
 
-  defp reasoner_outcome_for_event("reasoner_outcome_recorded", payload, _existing), do: payload["outcome_type"]
-  defp reasoner_outcome_for_event(_event_type, _payload, existing), do: existing["reasoner_outcome"]
+  defp reasoner_outcome_for_event("reasoner_outcome_recorded", payload, _existing),
+    do: payload["outcome_type"]
 
-  defp policy_decision_for_event("policy_decision_recorded", payload, _existing), do: payload["decision"]
-  defp policy_decision_for_event("stale_snapshot_denied", payload, _existing), do: payload["decision"]
+  defp reasoner_outcome_for_event(_event_type, _payload, existing),
+    do: existing["reasoner_outcome"]
+
+  defp policy_decision_for_event("policy_decision_recorded", payload, _existing),
+    do: payload["decision"]
+
+  defp policy_decision_for_event("stale_snapshot_denied", payload, _existing),
+    do: payload["decision"]
+
   defp policy_decision_for_event(_event_type, _payload, existing), do: existing["policy_decision"]
 
-  defp command_id_for_event("command_envelope_issued", payload, _existing), do: payload["command_id"]
-  defp command_id_for_event("after_action_recorded", payload, existing), do: payload["command_id"] || existing["command_id"]
+  defp command_id_for_event("command_envelope_issued", payload, _existing),
+    do: payload["command_id"]
+
+  defp command_id_for_event("after_action_recorded", payload, existing),
+    do: payload["command_id"] || existing["command_id"]
+
   defp command_id_for_event(_event_type, _payload, existing), do: existing["command_id"]
 
-  defp effect_key_for_event("command_envelope_issued", payload, _existing), do: payload["effect_key"]
-  defp effect_key_for_event("after_action_recorded", payload, existing), do: payload["effect_key"] || existing["effect_key"]
+  defp effect_key_for_event("command_envelope_issued", payload, _existing),
+    do: payload["effect_key"]
+
+  defp effect_key_for_event("after_action_recorded", payload, existing),
+    do: payload["effect_key"] || existing["effect_key"]
+
   defp effect_key_for_event(_event_type, _payload, existing), do: existing["effect_key"]
 
-  defp after_action_status_for_event("after_action_recorded", payload, _existing), do: payload["status"]
-  defp after_action_status_for_event(_event_type, _payload, existing), do: existing["after_action_status"]
+  defp after_action_status_for_event("after_action_recorded", payload, _existing),
+    do: payload["status"]
 
-  defp connection_status_for_event("connection_status_observed", payload, _existing), do: payload["fault_type"]
-  defp connection_status_for_event(_event_type, _payload, existing), do: existing["connection_status"]
+  defp after_action_status_for_event(_event_type, _payload, existing),
+    do: existing["after_action_status"]
 
-  defp latest_command_for_event("command_envelope_issued", payload, _existing), do: payload["command_id"]
-  defp latest_command_for_event(_event_type, _payload, existing), do: existing["latest_command_id"]
+  defp connection_status_for_event("connection_status_observed", payload, _existing),
+    do: payload["fault_type"]
 
-  defp latest_after_action_for_event("after_action_recorded", payload, _existing), do: payload["after_action_id"]
-  defp latest_after_action_for_event(_event_type, _payload, existing), do: existing["latest_after_action_id"]
+  defp connection_status_for_event(_event_type, _payload, existing),
+    do: existing["connection_status"]
 
-  defp pending_command_for_event("command_envelope_issued", payload, _existing), do: payload["command_id"]
+  defp latest_command_for_event("command_envelope_issued", payload, _existing),
+    do: payload["command_id"]
+
+  defp latest_command_for_event(_event_type, _payload, existing),
+    do: existing["latest_command_id"]
+
+  defp latest_after_action_for_event("after_action_recorded", payload, _existing),
+    do: payload["after_action_id"]
+
+  defp latest_after_action_for_event(_event_type, _payload, existing),
+    do: existing["latest_after_action_id"]
+
+  defp pending_command_for_event("command_envelope_issued", payload, _existing),
+    do: payload["command_id"]
+
   defp pending_command_for_event("after_action_recorded", _payload, _existing), do: nil
-  defp pending_command_for_event(_event_type, _payload, existing), do: existing["pending_command_id"]
 
-  defp pending_effect_for_event("command_envelope_issued", payload, _existing), do: payload["effect_key"]
+  defp pending_command_for_event(_event_type, _payload, existing),
+    do: existing["pending_command_id"]
+
+  defp pending_effect_for_event("command_envelope_issued", payload, _existing),
+    do: payload["effect_key"]
+
   defp pending_effect_for_event("after_action_recorded", _payload, _existing), do: nil
-  defp pending_effect_for_event(_event_type, _payload, existing), do: existing["pending_effect_key"]
 
-  defp command_lifecycle_for_event("command_envelope_issued", _payload, _existing), do: "pending_command"
-  defp command_lifecycle_for_event("after_action_recorded", payload, _existing), do: payload["status"]
-  defp command_lifecycle_for_event(_event_type, _payload, existing), do: existing["command_lifecycle"]
+  defp pending_effect_for_event(_event_type, _payload, existing),
+    do: existing["pending_effect_key"]
+
+  defp command_lifecycle_for_event("command_envelope_issued", _payload, _existing),
+    do: "pending_command"
+
+  defp command_lifecycle_for_event("after_action_recorded", payload, _existing),
+    do: payload["status"]
+
+  defp command_lifecycle_for_event(_event_type, _payload, existing),
+    do: existing["command_lifecycle"]
 
   defp nested_status(snapshot, source) do
     snapshot
     |> Map.get("source_status", %{})
     |> Map.get(source)
+  end
+
+  defp nested_receive_value(snapshot, parent_key, child_key) do
+    snapshot
+    |> Map.get(parent_key, %{})
+    |> Map.get(child_key)
   end
 
   defp normalize_payload(nil), do: %{}
@@ -433,7 +543,9 @@ defmodule Eigenforge.Core.LedgerProjections do
   defp normalize_payload(map) when is_map(map), do: Contracts.signable_map(map)
 
   defp started_at_for_event("ledger_genesis", _event, existing), do: existing["started_at"]
-  defp started_at_for_event(_event_type, event, existing), do: existing["started_at"] || fetch_field(event, :occurred_at)
+
+  defp started_at_for_event(_event_type, event, existing),
+    do: existing["started_at"] || fetch_field(event, :occurred_at)
 
   defp fetch_field(map, key) when is_map(map) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

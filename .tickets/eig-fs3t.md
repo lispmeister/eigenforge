@@ -5,7 +5,7 @@ deps: [eig-ib5q]
 links: []
 created: 2026-05-14T00:00:00Z
 type: task
-priority: 4
+priority: 2
 assignee: lispmeister
 ---
 # Add Core.FaultStatusSubscriber as a dedicated process (§2 OTP layout)
