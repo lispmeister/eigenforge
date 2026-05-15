@@ -9,15 +9,13 @@ defmodule Eigenforge.IO.HomeAssistantClient do
 
   use GenServer
 
-  alias Eigenforge.Core.IoFaultStatus
   alias Eigenforge.Core.PubSub
   alias Eigenforge.Core.RuntimeConfig
   alias Eigenforge.Core.SignedConfig
-  alias Eigenforge.Contracts
-  alias Eigenforge.IO.CommandExecutionStore
-  alias Eigenforge.IO.ActuatorStub
+  alias Eigenforge.IO.CommandExecutor
+  alias Eigenforge.IO.FaultStatus
+  alias Eigenforge.Mailbox.ChannelManager
   alias Eigenforge.IO.HomeAssistantAdapter
-  alias Eigenforge.Mailbox.CommandPublisher
 
   @default_server __MODULE__
   @commands_topic "commands:io"
@@ -29,7 +27,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       home_assistant: config.home_assistant,
       hmac_secret: config.hmac_secret,
       ha_reconnect_max_ms: config.ha_reconnect_max_ms,
-      io_fault_status: IoFaultStatus,
+      io_fault_status: FaultStatus,
       pubsub_registry: Eigenforge.Core.PubSub.Registry,
       mailbox_registry: Eigenforge.Mailbox.Registry,
       mailbox_receipt_store: Eigenforge.Mailbox.ReceiptStore,
@@ -66,14 +64,14 @@ defmodule Eigenforge.IO.HomeAssistantClient do
   def init(opts) do
     home_assistant = Keyword.fetch!(opts, :home_assistant)
     mailbox_registry = Keyword.get(opts, :mailbox_registry, Eigenforge.Mailbox.Registry)
-    {:ok, _} = CommandPublisher.subscribe(@commands_topic, registry_name: mailbox_registry)
+    {:ok, _} = ChannelManager.subscribe(@commands_topic, registry_name: mailbox_registry)
 
     state = %{
       room_id: Keyword.fetch!(opts, :room_id),
       home_assistant: home_assistant,
       hmac_secret: Keyword.fetch!(opts, :hmac_secret),
       ha_reconnect_max_ms: Keyword.fetch!(opts, :ha_reconnect_max_ms),
-      io_fault_status: Keyword.get(opts, :io_fault_status, IoFaultStatus),
+      io_fault_status: Keyword.get(opts, :io_fault_status, FaultStatus),
       pubsub_registry: Keyword.get(opts, :pubsub_registry, Eigenforge.Core.PubSub.Registry),
       mailbox_registry: mailbox_registry,
       mailbox_receipt_store:
@@ -252,7 +250,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
 
   def handle_info({:mailbox_command, @commands_topic, delivery}, state) when is_map(delivery) do
     next_state =
-      case verify_and_dispatch(delivery, state) do
+      case CommandExecutor.execute(delivery, state) do
         {:ok, _result} ->
           state
 
@@ -275,64 +273,6 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       )
     else
       state.transport.connect(state.home_assistant.url, state.home_assistant.token)
-    end
-  end
-
-  defp verify_and_dispatch(%{"command" => command, "receipt" => receipt}, state)
-       when is_map(command) and is_map(receipt) do
-    with :ok <- verify_delivery(command, receipt, state),
-         {:ok, result} <- dispatch_command(command, Map.put(state, :current_command, command)),
-         :ok <-
-           CommandPublisher.mark_io_accepted(
-             receipt["receipt_id"],
-             %{
-               accepted_at: timestamp(state),
-               accepted_monotonic_ms: current_monotonic_ms(state)
-             },
-             receipt_store: state.mailbox_receipt_store
-           ) do
-      {:ok, result}
-    end
-  end
-
-  defp verify_and_dispatch(command, state) when is_map(command),
-    do: dispatch_command(command, state)
-
-  defp verify_delivery(command, receipt, state) do
-    cond do
-      not valid_signature?(
-        command,
-        command["signature"],
-        state.hmac_secret,
-        "eigenforge:v1:command_envelope"
-      ) ->
-        {:error, :invalid_command_signature}
-
-      not valid_signature?(
-        receipt,
-        receipt["signature"],
-        state.hmac_secret,
-        "eigenforge:v1:delivery_receipt"
-      ) ->
-        {:error, :invalid_delivery_receipt_signature}
-
-      receipt["command_id"] != command["command_id"] ->
-        {:error, :receipt_command_mismatch}
-
-      receipt["decision_event_id"] != command["decision_event_id"] ->
-        {:error, :receipt_decision_mismatch}
-
-      blank?(receipt["ledger_event_hash"]) ->
-        {:error, :missing_committed_ledger_reference}
-
-      not is_integer(receipt["ledger_sequence"]) or receipt["ledger_sequence"] <= 0 ->
-        {:error, :missing_committed_ledger_reference}
-
-      command_expired?(command, state) ->
-        {:error, :command_expired}
-
-      true ->
-        :ok
     end
   end
 
@@ -364,59 +304,8 @@ defmodule Eigenforge.IO.HomeAssistantClient do
     end
   end
 
-  defp dispatch_command(%{"target" => target, "requested_state" => requested_state}, _state)
-       when target in ["actuator:light", "actuator:laser", "actuator:piezo_beeper"] do
-    ActuatorStub.execute(target, requested_state)
-  end
-
-  defp dispatch_command(
-         %{"target" => "actuator:fan", "requested_state" => requested_state},
-         state
-       ) do
-    cond do
-      not state.connected? ->
-        {:error, :not_connected}
-
-      not state.physical_control_enabled? ->
-        {:error, :physical_control_disabled}
-
-      CommandExecutionStore.already_executed?(
-        state.command_execution_store,
-        state.current_command["idempotency_key"]
-      ) ->
-        {:error, :duplicate_idempotency_key}
-
-      true ->
-        with {:ok, request} <-
-               HomeAssistantAdapter.command_request(
-                 state.home_assistant.entity_ids.fan,
-                 requested_state
-               ),
-             {:ok, result} <- state.transport.command(state.conn, request),
-             :ok <-
-               CommandExecutionStore.record(state.command_execution_store, %{
-                 idempotency_key: state.current_command["idempotency_key"],
-                 command_id: state.current_command["command_id"],
-                 effect_key: state.current_command["effect_key"],
-                 target: state.current_command["target"],
-                 requested_state: state.current_command["requested_state"],
-                 adapter_attempt_id: "adapter-attempt:" <> state.current_command["command_id"],
-                 execution_status: "io_accepted",
-                 recorded_at: timestamp(state)
-               }) do
-          maybe_notify_command_observer(state.command_observer, request, result)
-          {:ok, result}
-        end
-    end
-  end
-
-  defp dispatch_command(%{"target" => target}, _state),
-    do: {:error, {:unsupported_target, target}}
-
-  defp dispatch_command(_command, _state), do: {:error, :invalid_command}
-
   defp record_status(state, fault_type, attrs) do
-    IoFaultStatus.record(state.io_fault_status, %{
+    FaultStatus.record(state.io_fault_status, %{
       source: "home_assistant",
       room_id: state.room_id,
       fault_type: fault_type,
@@ -427,7 +316,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
   end
 
   defp record_fault(state, fault_type, reason, command) do
-    IoFaultStatus.record(state.io_fault_status, %{
+    FaultStatus.record(state.io_fault_status, %{
       source: "home_assistant",
       room_id: state.room_id,
       fault_type: fault_type,
@@ -461,34 +350,10 @@ defmodule Eigenforge.IO.HomeAssistantClient do
   defp fault_type_for_reason(:invalid_command), do: "invalid_command"
   defp fault_type_for_reason(_reason), do: "adapter_execution_failed"
 
-  defp maybe_notify_command_observer(nil, _request, _result), do: :ok
-
-  defp maybe_notify_command_observer(pid, request, result) when is_pid(pid),
-    do: send(pid, {:transport_command, request, result})
-
   defp active_room_id(config) do
     case SignedConfig.load_device_inventory(config) do
       {:ok, %{active_room: %{"room_id" => room_id}}} -> room_id
       _ -> "placeholder"
-    end
-  end
-
-  defp monotonic_deadline_ms(timestamp, state) do
-    case absolute_deadline_ms(timestamp, state) do
-      deadline_ms when is_integer(deadline_ms) ->
-        if deadline_ms >= current_monotonic_ms(state), do: deadline_ms, else: nil
-
-      _ ->
-        nil
-    end
-  end
-
-  defp absolute_deadline_ms(timestamp, state) do
-    with {:ok, expires_at, _offset} <- DateTime.from_iso8601(timestamp) do
-      delta_ms = DateTime.diff(expires_at, state.started_at_utc, :millisecond)
-      state.started_monotonic_ms + delta_ms
-    else
-      _ -> nil
     end
   end
 
@@ -501,20 +366,6 @@ defmodule Eigenforge.IO.HomeAssistantClient do
 
   defp current_utc(state), do: state.utc_now.()
   defp current_monotonic_ms(state), do: state.monotonic_now_ms.()
-  defp blank?(value), do: value in [nil, ""]
-
-  defp command_expired?(command, state) do
-    case monotonic_deadline_ms(command["expires_at"], state) do
-      deadline_ms when is_integer(deadline_ms) -> current_monotonic_ms(state) > deadline_ms
-      nil -> true
-    end
-  end
-
-  defp valid_signature?(payload, signature, secret, purpose) when is_binary(signature) do
-    Contracts.verify_hmac(payload, secret, signature, purpose)
-  end
-
-  defp valid_signature?(_payload, _signature, _secret, _purpose), do: false
 
   defmodule Transport do
     @callback connect(String.t(), String.t()) :: {:ok, term(), map()} | {:error, term()}

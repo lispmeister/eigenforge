@@ -75,11 +75,6 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     pubsub_registry = Keyword.get(opts, :pubsub_registry, Eigenforge.Core.PubSub.Registry)
     :ok = subscribe(room_id, pubsub_registry)
 
-    io_fault_status_registry =
-      Keyword.get(opts, :io_fault_status_registry, Eigenforge.Core.IoFaultStatus.Registry)
-
-    :ok = subscribe_faults(io_fault_status_registry)
-
     {:ok, state}
   end
 
@@ -89,10 +84,12 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
       if topic == room_topic(state.room_id) do
         case normalize_snapshot(snapshot_payload) do
           {:ok, snapshot} ->
+            prior_room_state = fetch_room_state(state)
             _ = maybe_observe_snapshot(snapshot, state)
             state = maybe_resolve_pending_from_snapshot(snapshot, state)
 
-            if MapSet.member?(state.processed_snapshot_ids, snapshot.snapshot_id) do
+            if MapSet.member?(state.processed_snapshot_ids, snapshot.snapshot_id) or
+                 should_coalesce_nominal_snapshot?(snapshot, prior_room_state) do
               state
             else
               case run_pipeline(snapshot, state) do
@@ -118,8 +115,28 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     {:noreply, state}
   end
 
-  def handle_info({:io_fault_status, event}, state) do
+  @impl true
+  def handle_call({:fault_status_event, event}, _from, state) do
+    {:reply, :ok, maybe_resolve_pending_from_fault(event, state)}
+  end
+
+  @impl true
+  def handle_call({:pending_command_details, command_id}, _from, state) do
+    reply =
+      case Map.get(state.pending_commands, command_id) do
+        nil -> {:error, :unknown_pending_command}
+        pending -> {:ok, pending}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_info({:fault_status_event, event}, state) do
     {:noreply, maybe_resolve_pending_from_fault(event, state)}
+  end
+
+  def handle_info({:fault_status_pending_command_resolved, command_id}, state) do
+    {:noreply, drop_pending_command(state, command_id)}
   end
 
   def handle_info({:after_action_timeout, command_id}, state) do
@@ -184,11 +201,11 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     sql = """
     SELECT pending_effect_key
     FROM latest_room_control_state
-    WHERE room_id = '#{String.replace(room_id, "'", "''")}'
+    WHERE room_id = ?1
     LIMIT 1;
     """
 
-    case LedgerProjections.query_json(db_path, sql) do
+    case LedgerProjections.query_json(db_path, sql, [room_id]) do
       {:ok, [%{"pending_effect_key" => pending_effect_key}]} -> pending_effect_key == effect_key
       _ -> false
     end
@@ -211,45 +228,13 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
 
       case LedgerWriter.append(state.writer, attrs) do
         {:ok, event} ->
-          acc = Map.put(acc, event_type, event)
-
-          case append_stale_deny(payload, refs, state) do
-            {:ok, nil} ->
-              {:cont, {:ok, acc}}
-
-            {:ok, stale_event} ->
-              {:cont, {:ok, Map.put(acc, "stale_snapshot_denied", stale_event)}}
-
-            {:error, reason} ->
-              {:halt, {:error, reason}}
-          end
+          {:cont, {:ok, Map.put(acc, event_type, event)}}
 
         {:error, reason} ->
           {:halt, {:error, reason}}
       end
     end)
   end
-
-  defp append_stale_deny(
-         %Eigenforge.Contracts.PolicyDecision{decision: "deny_stale_snapshot"} = policy,
-         refs,
-         state
-       ) do
-    attrs = %{
-      event_id: refs.stale_deny_event_id,
-      event_type: "stale_snapshot_denied",
-      payload: policy,
-      subject: "core_rule_stub",
-      source_app: "eigenforge_core",
-      consensus_decision_id: refs.consensus_decision_id,
-      consensus_status: "single_core_finalized",
-      correlation_id: refs.correlation_id
-    }
-
-    LedgerWriter.append(state.writer, attrs)
-  end
-
-  defp append_stale_deny(_payload, _refs, _state), do: {:ok, nil}
 
   defp normalize_snapshot(%NormalizedSnapshot{} = snapshot), do: {:ok, snapshot}
 
@@ -258,8 +243,6 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   rescue
     error -> {:error, {:invalid_snapshot, Exception.message(error)}}
   end
-
-  defp maybe_observe_snapshot(_snapshot, %{db_path: nil}), do: :ok
 
   defp maybe_observe_snapshot(snapshot, state) do
     LedgerProjections.observe_snapshot(state.db_path, snapshot, io_mode: state.io_mode)
@@ -289,39 +272,6 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
             refs = pending.refs
 
             case append_payloads([after_action], snapshot, refs, acc) do
-              {:ok, _appended_events} -> drop_pending_command(acc, command_id)
-              {:error, _reason} -> acc
-            end
-
-          {:error, _reason} ->
-            acc
-        end
-      else
-        acc
-      end
-    end)
-  end
-
-  defp maybe_resolve_pending_from_fault(event, state) do
-    Enum.reduce(state.pending_commands, state, fn {command_id, pending}, acc ->
-      if event.room_id == acc.room_id do
-        case acc.after_action_observer.interpret_fault(
-               pending.command,
-               %{
-                 fault_type: event.fault_type,
-                 event_id: event.event_id,
-                 source_received_seq: get_in(event.metadata || %{}, ["source_received_seq"]),
-                 source_received_monotonic_ms:
-                   get_in(event.metadata || %{}, ["source_received_monotonic_ms"]),
-                 reported_at: event.observed_at
-               },
-               pending.pre_command_snapshot
-             ) do
-          {:ok, after_action} ->
-            refs = pending.refs
-            synthetic_snapshot = pending.pre_command_snapshot
-
-            case append_payloads([after_action], synthetic_snapshot, refs, acc) do
               {:ok, _appended_events} -> drop_pending_command(acc, command_id)
               {:error, _reason} -> acc
             end
@@ -412,6 +362,39 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     end
   end
 
+  defp maybe_resolve_pending_from_fault(event, state) do
+    Enum.reduce(state.pending_commands, state, fn {command_id, pending}, acc ->
+      if event.room_id == acc.room_id do
+        case acc.after_action_observer.interpret_fault(
+               pending.command,
+               %{
+                 fault_type: event.fault_type,
+                 event_id: event.event_id,
+                 source_received_seq: get_in(event.metadata || %{}, ["source_received_seq"]),
+                 source_received_monotonic_ms:
+                   get_in(event.metadata || %{}, ["source_received_monotonic_ms"]),
+                 reported_at: event.observed_at
+               },
+               pending.pre_command_snapshot
+             ) do
+          {:ok, after_action} ->
+            refs = pending.refs
+            synthetic_snapshot = pending.pre_command_snapshot
+
+            case append_payloads([after_action], synthetic_snapshot, refs, acc) do
+              {:ok, _appended_events} -> drop_pending_command(acc, command_id)
+              {:error, _reason} -> acc
+            end
+
+          {:error, _reason} ->
+            acc
+        end
+      else
+        acc
+      end
+    end)
+  end
+
   def recover_pending_commands(%{db_path: nil} = state), do: state
 
   def recover_pending_commands(state) do
@@ -442,12 +425,12 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     sql = """
     SELECT *
     FROM latest_room_control_state
-    WHERE room_id = '#{String.replace(room_id, "'", "''")}'
+    WHERE room_id = ?1
       AND pending_command_id IS NOT NULL
       AND pending_command_id != '';
     """
 
-    case LedgerProjections.query_json(db_path, sql) do
+    case LedgerProjections.query_json(db_path, sql, [room_id]) do
       {:ok, rows} -> {:ok, rows}
       {:error, reason} -> {:error, reason}
     end
@@ -458,7 +441,7 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
 
     with {:ok, command} <- fetch_command(command_id, state.db_path),
          {:ok, receipts} <-
-           Eigenforge.Mailbox.ReceiptStore.entries_for_command(
+           Eigenforge.Mailbox.Projections.receipts_for_command(
              state.mailbox_receipt_store,
              command.command_id
            ) do
@@ -476,11 +459,11 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     sql = """
     SELECT *
     FROM latest_room_control_state
-    WHERE room_id = '#{String.replace(room_id, "'", "''")}'
+    WHERE room_id = ?1
     LIMIT 1;
     """
 
-    case LedgerProjections.query_json(db_path, sql) do
+    case LedgerProjections.query_json(db_path, sql, [room_id]) do
       {:ok, [row]} -> {:ok, row}
       {:ok, []} -> {:ok, nil}
       {:error, reason} -> {:error, reason}
@@ -492,13 +475,13 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
     SELECT payload
     FROM ledger_events
     WHERE event_type = 'command_envelope_issued'
-      AND json_extract(payload, '$.command_id') = '#{String.replace(command_id, "'", "''")}'
+      AND json_extract(payload, '$.command_id') = ?1
     ORDER BY sequence DESC
     LIMIT 1;
     """
 
     try do
-      case LedgerProjections.query_json(db_path, sql) do
+      case LedgerProjections.query_json(db_path, sql, [command_id]) do
         {:ok, [%{"payload" => payload_json}]} ->
           payload_json
           |> Contracts.decode_json!()
@@ -745,25 +728,17 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   defp current_utc(state), do: state.utc_now.()
   defp current_monotonic_ms(state), do: state.monotonic_now_ms.()
 
-  defp event_type(%module{}) do
-    cond do
-      module == Eigenforge.Contracts.ReasonerOutcome -> "reasoner_outcome_recorded"
-      module == Eigenforge.Contracts.CapabilityCheck -> "capability_check_recorded"
-      module == Eigenforge.Contracts.PolicyDecision -> "policy_decision_recorded"
-      module == Eigenforge.Contracts.CommandEnvelope -> "command_envelope_issued"
-      module == Eigenforge.Contracts.AfterActionEvent -> "after_action_recorded"
-    end
-  end
+  defp event_type(%Eigenforge.Contracts.ReasonerOutcome{}), do: "reasoner_outcome_recorded"
+  defp event_type(%Eigenforge.Contracts.CapabilityCheck{}), do: "capability_check_recorded"
+  defp event_type(%Eigenforge.Contracts.PolicyDecision{decision: "deny_stale_snapshot"}),
+    do: "stale_snapshot_denied"
+
+  defp event_type(%Eigenforge.Contracts.PolicyDecision{}), do: "policy_decision_recorded"
+  defp event_type(%Eigenforge.Contracts.CommandEnvelope{}), do: "command_envelope_issued"
+  defp event_type(%Eigenforge.Contracts.AfterActionEvent{}), do: "after_action_recorded"
 
   defp subscribe(room_id, registry_name) do
     case PubSub.subscribe(room_topic(room_id), registry_name: registry_name) do
-      {:ok, _} -> :ok
-      {:error, {:already_registered, _}} -> :ok
-    end
-  end
-
-  defp subscribe_faults(registry_name) do
-    case Eigenforge.Core.IoFaultStatus.subscribe(registry_name) do
       {:ok, _} -> :ok
       {:error, {:already_registered, _}} -> :ok
     end
@@ -794,6 +769,67 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   defp event_id_for("stale_snapshot_denied", refs), do: refs.stale_deny_event_id
   defp event_id_for("command_envelope_issued", refs), do: refs.command_event_id
   defp event_id_for("after_action_recorded", refs), do: refs.after_action_event_id
+
+  defp should_coalesce_nominal_snapshot?(snapshot, {:ok, room_state}) do
+    prior_decision_recorded?(room_state) and
+      nominal_snapshot?(snapshot) and
+      nominal_snapshot_unchanged?(snapshot, room_state)
+  end
+
+  defp should_coalesce_nominal_snapshot?(_snapshot, _room_state), do: false
+
+  defp nominal_snapshot?(%NormalizedSnapshot{} = snapshot),
+    do: nominal_snapshot_fresh?(snapshot) and nominal_co2_range?(snapshot)
+
+  defp nominal_snapshot?(%{} = snapshot),
+    do: nominal_snapshot_fresh?(snapshot) and nominal_co2_range?(snapshot)
+
+  defp nominal_snapshot?(_snapshot), do: false
+
+  defp nominal_snapshot_fresh?(snapshot) do
+    case Map.get(snapshot, :freshness) || Map.get(snapshot, "freshness") do
+      freshness when freshness in ["fresh", :fresh] -> true
+      _ -> false
+    end
+  end
+
+  defp nominal_co2_range?(snapshot) do
+    case Map.get(snapshot, :co2_ppm) || Map.get(snapshot, "co2_ppm") do
+      co2 when is_integer(co2) -> co2 >= 500 and co2 <= 1000
+      co2 when is_float(co2) -> co2 >= 500.0 and co2 <= 1000.0
+      _ -> false
+    end
+  end
+
+  defp nominal_snapshot_unchanged?(snapshot, room_state) do
+    snapshot_fan = Map.get(snapshot, :fan_state) || Map.get(snapshot, "fan_state")
+    snapshot_source_status = Map.get(snapshot, :source_status) || Map.get(snapshot, "source_status") || %{}
+    snapshot_co2 = Map.get(snapshot_source_status, :co2) || Map.get(snapshot_source_status, "co2")
+
+    snapshot_freshness = Map.get(snapshot, :freshness) || Map.get(snapshot, "freshness")
+    snapshot_pending_command_id =
+      Map.get(snapshot, :pending_command_id) || Map.get(snapshot, "pending_command_id")
+
+    snapshot_connection_status =
+      Map.get(snapshot, :connection_status) || Map.get(snapshot, "connection_status")
+
+    room_fan = room_state["fan_state"]
+    room_co2 = room_state["co2_status"]
+    room_freshness = room_state["freshness"]
+    room_pending_command_id = room_state["pending_command_id"]
+    room_connection_status = room_state["connection_status"]
+
+    snapshot_fan == room_fan and
+      snapshot_co2 == room_co2 and
+      snapshot_freshness == room_freshness and
+      snapshot_pending_command_id == room_pending_command_id and
+      snapshot_connection_status == room_connection_status
+  end
+
+  defp prior_decision_recorded?(room_state) do
+    room_state["latest_reasoner_outcome_id"] not in [nil, ""] and
+      room_state["latest_policy_decision_id"] not in [nil, ""]
+  end
 
   defp room_topic(room_id), do: "io_state:room:#{room_id}"
 end

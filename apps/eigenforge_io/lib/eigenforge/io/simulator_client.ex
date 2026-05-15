@@ -5,10 +5,10 @@ defmodule Eigenforge.IO.SimulatorClient do
 
   use GenServer
 
-  alias Eigenforge.Core.IoFaultStatus
   alias Eigenforge.Core.PubSub
   alias Eigenforge.Core.RuntimeConfig
   alias Eigenforge.Core.SimulatorFixture
+  alias Eigenforge.IO.FaultStatus
 
   @default_server __MODULE__
 
@@ -16,7 +16,7 @@ defmodule Eigenforge.IO.SimulatorClient do
   def start_link(%RuntimeConfig{} = config) do
     start_link(
       fixtures_dir: config.simulator_snapshots_dir,
-      io_fault_status: IoFaultStatus,
+      io_fault_status: FaultStatus,
       pubsub_registry: Eigenforge.Core.PubSub.Registry,
       name: @default_server
     )
@@ -50,7 +50,7 @@ defmodule Eigenforge.IO.SimulatorClient do
   def init(opts) do
     state = %{
       fixtures_dir: Keyword.fetch!(opts, :fixtures_dir),
-      io_fault_status: Keyword.get(opts, :io_fault_status, IoFaultStatus),
+      io_fault_status: Keyword.get(opts, :io_fault_status, FaultStatus),
       pubsub_registry: Keyword.get(opts, :pubsub_registry, Eigenforge.Core.PubSub.Registry)
     }
 
@@ -87,7 +87,7 @@ defmodule Eigenforge.IO.SimulatorClient do
 
     if co2_status in ~w(malformed missing unknown unavailable) do
       _ =
-        IoFaultStatus.record(io_fault_status, %{
+        FaultStatus.record(io_fault_status, %{
           source: "simulator",
           room_id: room_id,
           fault_type: "malformed_observation",

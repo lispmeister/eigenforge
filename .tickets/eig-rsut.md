@@ -1,6 +1,6 @@
 ---
 id: eig-rsut
-status: open
+status: closed
 deps: [eig-ibj4]
 links: []
 created: 2026-05-14T05:54:26Z

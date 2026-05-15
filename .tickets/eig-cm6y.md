@@ -1,6 +1,6 @@
 ---
 id: eig-cm6y
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T00:00:00Z

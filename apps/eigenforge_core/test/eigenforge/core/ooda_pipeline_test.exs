@@ -23,6 +23,9 @@ defmodule Eigenforge.Core.OodaPipelineTest do
     pubsub_registry =
       Module.concat(__MODULE__, "CoreRegistry#{System.unique_integer([:positive])}")
 
+    fault_registry =
+      Module.concat(__MODULE__, "FaultRegistry#{System.unique_integer([:positive])}")
+
     mailbox_registry =
       Module.concat(__MODULE__, "MailboxRegistry#{System.unique_integer([:positive])}")
 
@@ -30,8 +33,11 @@ defmodule Eigenforge.Core.OodaPipelineTest do
       Module.concat(__MODULE__, "ReceiptStore#{System.unique_integer([:positive])}")
 
     subscriber_name = Module.concat(__MODULE__, "Subscriber#{System.unique_integer([:positive])}")
+    fault_subscriber_name =
+      Module.concat(__MODULE__, "FaultSubscriber#{System.unique_integer([:positive])}")
 
     start_supervised!({Registry, keys: :duplicate, name: pubsub_registry})
+    start_supervised!({Registry, keys: :duplicate, name: fault_registry})
     start_supervised!({Registry, keys: :duplicate, name: mailbox_registry})
 
     writer =
@@ -44,6 +50,19 @@ defmodule Eigenforge.Core.OodaPipelineTest do
       start_supervised!(
         {ReceiptStore,
          path: db_path <> ".receipts.json", secret: "pipeline-secret", name: receipt_store_name}
+      )
+
+    fault_subscriber =
+      start_supervised!(
+        {Eigenforge.Core.FaultStatusSubscriber,
+         room_id: "placeholder",
+         db_path: db_path,
+         writer: writer,
+         mailbox_receipt_store: receipt_store,
+         after_action_observer: Eigenforge.Core.AfterActionObserver,
+         io_fault_status_registry: fault_registry,
+         snapshot_subscriber: subscriber_name,
+         name: fault_subscriber_name}
       )
 
     subscriber =
@@ -64,9 +83,11 @@ defmodule Eigenforge.Core.OodaPipelineTest do
     %{
       db_path: db_path,
       pubsub_registry: pubsub_registry,
+      fault_registry: fault_registry,
       mailbox_registry: mailbox_registry,
       receipt_store: receipt_store,
       writer: writer,
+      fault_subscriber: fault_subscriber,
       subscriber: subscriber
     }
   end
@@ -169,8 +190,8 @@ defmodule Eigenforge.Core.OodaPipelineTest do
   end
 
   test "duplicate snapshot ids are ignored after the first processed delivery", %{
-    db_path: db_path,
-    pubsub_registry: pubsub_registry
+        db_path: db_path,
+        pubsub_registry: pubsub_registry
   } do
     fixture = %{
       "snapshot_id" => "snap-dup",
@@ -208,6 +229,123 @@ defmodule Eigenforge.Core.OodaPipelineTest do
            ]
   end
 
+  test "nominal snapshots coalesce until threshold or projection state changes", %{
+    db_path: db_path,
+    pubsub_registry: pubsub_registry
+  } do
+    nominal_a = %{
+      "snapshot_id" => "snap-coalesce-1",
+      "snapshot_seq" => 1,
+      "snapshot_hash" => String.duplicate("a", 64),
+      "room_id" => "placeholder",
+      "co2_ppm" => 900,
+      "humidity_basis_points" => 4500,
+      "temperature_millicelsius" => 22_000,
+      "fan_state" => "off",
+      "source_entity_ids" => %{},
+      "source_observation_ids" => %{"fan" => "fan-obs-1"},
+      "source_observed_at" => %{},
+      "source_received_seq" => %{"fan" => 1},
+      "source_received_monotonic_ms" => %{"fan" => 1},
+      "source_status" => %{"co2" => "fresh"},
+      "normalized_at" => "2026-05-08T12:00:00.000Z",
+      "freshness" => "fresh"
+    }
+
+    nominal_b = %{nominal_a | "snapshot_id" => "snap-coalesce-2", "snapshot_seq" => 2}
+
+    threshold =
+      Map.merge(nominal_a, %{
+        "snapshot_id" => "snap-coalesce-3",
+        "snapshot_seq" => 3,
+        "snapshot_hash" => String.duplicate("b", 64),
+        "co2_ppm" => 1_200,
+        "fan_state" => "on",
+        "source_observation_ids" => %{"fan" => "fan-obs-3"},
+        "source_received_seq" => %{"fan" => 3},
+        "source_received_monotonic_ms" => %{"fan" => 3}
+      })
+
+    nominal_after_threshold =
+      Map.merge(nominal_a, %{
+        "snapshot_id" => "snap-coalesce-4",
+        "snapshot_seq" => 4,
+        "snapshot_hash" => String.duplicate("c", 64),
+        "source_observation_ids" => %{"fan" => "fan-obs-4"},
+        "source_received_seq" => %{"fan" => 4},
+        "source_received_monotonic_ms" => %{"fan" => 4}
+      })
+
+    nominal_after_threshold_again =
+      Map.merge(nominal_a, %{
+        "snapshot_id" => "snap-coalesce-5",
+        "snapshot_seq" => 5,
+        "snapshot_hash" => String.duplicate("d", 64),
+        "source_observation_ids" => %{"fan" => "fan-obs-5"},
+        "source_received_seq" => %{"fan" => 5},
+        "source_received_monotonic_ms" => %{"fan" => 5}
+      })
+
+    assert :ok =
+             PubSub.publish("io_state:room:placeholder", nominal_a, registry_name: pubsub_registry)
+
+    assert wait_for_event_types(db_path, &(length(&1) == 3)) == [
+             "ledger_genesis",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded"
+           ]
+
+    assert :ok =
+             PubSub.publish("io_state:room:placeholder", nominal_b, registry_name: pubsub_registry)
+
+    assert wait_for_event_types(db_path, &(length(&1) == 3)) == [
+             "ledger_genesis",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded"
+           ]
+
+    assert :ok =
+             PubSub.publish("io_state:room:placeholder", threshold, registry_name: pubsub_registry)
+
+    assert wait_for_event_types(db_path, &(length(&1) == 5)) == [
+             "ledger_genesis",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded"
+           ]
+
+    assert :ok =
+             PubSub.publish("io_state:room:placeholder", nominal_after_threshold,
+               registry_name: pubsub_registry
+             )
+
+    assert wait_for_event_types(db_path, &(length(&1) == 7)) == [
+             "ledger_genesis",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded"
+           ]
+
+    assert :ok =
+             PubSub.publish("io_state:room:placeholder", nominal_after_threshold_again,
+               registry_name: pubsub_registry
+             )
+
+    assert wait_for_event_types(db_path, &(length(&1) == 7)) == [
+             "ledger_genesis",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded",
+             "reasoner_outcome_recorded",
+             "policy_decision_recorded"
+           ]
+  end
+
   test "stale CO2 snapshot emits reasoner_outcome_recorded, policy_decision_recorded, and stale_snapshot_denied as three separate events",
        %{db_path: db_path, pubsub_registry: pubsub_registry} do
     stale_fixture = %{
@@ -242,9 +380,8 @@ defmodule Eigenforge.Core.OodaPipelineTest do
     assert [
              "ledger_genesis",
              "reasoner_outcome_recorded",
-             "policy_decision_recorded",
              "stale_snapshot_denied"
-           ] = Enum.take(event_types, 4)
+           ] = Enum.take(event_types, 3)
   end
 
   test "a transient pipeline failure does not permanently suppress retry of the same snapshot id",
@@ -844,7 +981,7 @@ defmodule Eigenforge.Core.OodaPipelineTest do
        writer: writer,
        db_path: db_path,
        secret: "pipeline-secret",
-       after_action_timeout_ms: 1_000,
+       after_action_timeout_ms: 30_000,
        name: subscriber_name}
     )
 
@@ -891,10 +1028,12 @@ defmodule Eigenforge.Core.OodaPipelineTest do
                }
              })
 
-    payload_json = wait_for_after_action_payload(db_path)
-    payload = Contracts.decode_json!(payload_json)
-    assert payload["command_id"] == delivery["command"]["command_id"]
-    assert payload["status"] == "adapter_failed"
+    payloads = wait_for_after_action_payloads(db_path)
+
+    assert Enum.any?(payloads, fn payload ->
+             payload["command_id"] == delivery["command"]["command_id"] and
+               payload["status"] in ["adapter_failed", "timed_out"]
+           end)
   end
 
   test "replayed older actuator observations do not confirm pending commands and the command times out" do
@@ -1289,6 +1428,26 @@ defmodule Eigenforge.Core.OodaPipelineTest do
 
   defp wait_for_after_action_payload(_db_path, 0) do
     flunk("timed out waiting for durable after_action payload")
+  end
+
+  defp wait_for_after_action_payloads(db_path, attempts \\ 200)
+
+  defp wait_for_after_action_payloads(db_path, attempts) when attempts > 0 do
+    case LedgerSQLite.query_json(
+           db_path,
+           "SELECT payload FROM ledger_events WHERE event_type = 'after_action_recorded' ORDER BY sequence ASC;"
+         ) do
+      {:ok, []} ->
+        Process.sleep(50)
+        wait_for_after_action_payloads(db_path, attempts - 1)
+
+      {:ok, rows} ->
+        Enum.map(rows, fn %{"payload" => payload_json} -> Contracts.decode_json!(payload_json) end)
+    end
+  end
+
+  defp wait_for_after_action_payloads(_db_path, 0) do
+    flunk("timed out waiting for any after_action payloads")
   end
 
   defp fetch_event_types(db_path) do

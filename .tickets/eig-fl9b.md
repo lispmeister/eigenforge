@@ -1,6 +1,6 @@
 ---
 id: eig-fl9b
-status: open
+status: closed
 deps: [eig-ib5q]
 links: []
 created: 2026-05-14T00:00:00Z

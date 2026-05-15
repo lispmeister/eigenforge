@@ -12,6 +12,7 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
     log_path = Path.join(dir, "io_fault_status.log")
     registry_name = Module.concat(__MODULE__, "Registry#{System.unique_integer([:positive])}")
     writer_name = Module.concat(__MODULE__, "Writer#{System.unique_integer([:positive])}")
+    subscriber_name = Module.concat(__MODULE__, "Subscriber#{System.unique_integer([:positive])}")
     io_fault_status_name = Module.concat(__MODULE__, "IoFaultStatus#{System.unique_integer([:positive])}")
     secret = "io-fault-secret"
 
@@ -22,6 +23,19 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
     writer =
       start_supervised!(
         {LedgerWriter, db_path: db_path, core_node_id: "core_a", secret: secret, name: writer_name}
+      )
+
+    subscriber =
+      start_supervised!(
+        {Eigenforge.Core.FaultStatusSubscriber,
+         room_id: "placeholder",
+         db_path: db_path,
+         writer: writer,
+         mailbox_receipt_store: Eigenforge.Mailbox.ReceiptStore,
+         after_action_observer: Eigenforge.Core.AfterActionObserver,
+         io_fault_status_registry: registry_name,
+         snapshot_subscriber: self(),
+         name: subscriber_name}
       )
 
     io_fault_status =
@@ -43,6 +57,7 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
       log_path: log_path,
       registry_name: registry_name,
       writer: writer,
+      subscriber: subscriber,
       io_fault_status: io_fault_status,
       secret: secret
     }
@@ -76,10 +91,7 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
     refute log_body =~ secret
 
     assert {:ok, rows} =
-             LedgerSQLite.query_json(
-               db_path,
-               "SELECT sequence, event_type FROM ledger_events ORDER BY sequence ASC;"
-             )
+             wait_for_ledger_rows(db_path)
 
     assert Enum.map(rows, & &1["event_type"]) == ["ledger_genesis", "connection_status_observed"]
     assert :ok = LedgerTooling.verify(db_path, "core_a", secret)
@@ -125,10 +137,7 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
              })
 
     assert {:ok, rows} =
-             LedgerSQLite.query_json(
-               db_path,
-               "SELECT event_type FROM ledger_events ORDER BY sequence ASC;"
-             )
+             wait_for_ledger_rows(db_path)
 
     assert Enum.map(rows, & &1["event_type"]) == ["ledger_genesis", "connection_status_observed"]
   end
@@ -145,7 +154,7 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
              })
 
     assert {:ok, rows} =
-             LedgerSQLite.query_json(db_path, "SELECT event_type FROM ledger_events ORDER BY sequence ASC;")
+             wait_for_ledger_rows(db_path)
 
     assert Enum.map(rows, & &1["event_type"]) == ["ledger_genesis"]
   end
@@ -160,7 +169,7 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
              })
 
     assert {:ok, rows} =
-             LedgerSQLite.query_json(db_path, "SELECT event_type FROM ledger_events ORDER BY sequence ASC;")
+             wait_for_ledger_rows(db_path)
 
     assert Enum.map(rows, & &1["event_type"]) == ["ledger_genesis", "io_fault_observed"]
   end
@@ -196,11 +205,26 @@ defmodule Eigenforge.Core.IoFaultStatusTest do
              })
 
     assert {:ok, rows} =
-             LedgerSQLite.query_json(
-               db_path,
-               "SELECT event_type FROM ledger_events ORDER BY sequence ASC;"
-             )
+             wait_for_ledger_rows(db_path)
 
     assert Enum.map(rows, & &1["event_type"]) == ["ledger_genesis"]
+  end
+
+  defp wait_for_ledger_rows(db_path, attempts \\ 20)
+
+  defp wait_for_ledger_rows(db_path, 0) do
+    LedgerSQLite.query_json(db_path, "SELECT sequence, event_type FROM ledger_events ORDER BY sequence ASC;")
+  end
+
+  defp wait_for_ledger_rows(db_path, attempts) do
+    case LedgerSQLite.query_json(
+           db_path,
+           "SELECT sequence, event_type FROM ledger_events ORDER BY sequence ASC;"
+         ) do
+      {:ok, rows} = result when length(rows) >= 2 -> result
+      _ ->
+        Process.sleep(25)
+        wait_for_ledger_rows(db_path, attempts - 1)
+    end
   end
 end

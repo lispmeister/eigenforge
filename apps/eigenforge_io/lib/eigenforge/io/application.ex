@@ -13,16 +13,20 @@ defmodule Eigenforge.IO.Application do
 
   defp children(%Eigenforge.Core.RuntimeConfig{io_mode: :simulator} = config),
     do: [
+      {Registry, keys: :duplicate, name: Eigenforge.IO.FaultStatus.Registry},
+      {Eigenforge.IO.FaultStatus, config},
       {Eigenforge.IO.CommandExecutionStore,
        path: config.io_command_store_path, name: Eigenforge.IO.CommandExecutionStore},
-      {Eigenforge.IO.SimulatorClient, config}
+      {Eigenforge.IO.AdapterSupervisor, config}
     ]
 
   defp children(%Eigenforge.Core.RuntimeConfig{io_mode: :home_assistant} = config),
     do: [
+      {Registry, keys: :duplicate, name: Eigenforge.IO.FaultStatus.Registry},
+      {Eigenforge.IO.FaultStatus, config},
       {Eigenforge.IO.CommandExecutionStore,
        path: config.io_command_store_path, name: Eigenforge.IO.CommandExecutionStore},
-      {Eigenforge.IO.HomeAssistantClient, config}
+      {Eigenforge.IO.AdapterSupervisor, config}
     ]
 
   defp validate_startup_inputs(%Eigenforge.Core.RuntimeConfig{io_mode: :simulator} = config) do

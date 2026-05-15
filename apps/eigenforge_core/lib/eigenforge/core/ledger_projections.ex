@@ -24,7 +24,7 @@ defmodule Eigenforge.Core.LedgerProjections do
   end
 
   def init(conn) do
-    with {:ok, _} <- LedgerSQLite.query(conn, init_sql()),
+    with :ok <- LedgerSQLite.query(conn, init_sql()),
          :ok <- ensure_room_state_columns(conn) do
       :ok
     else
@@ -123,6 +123,10 @@ defmodule Eigenforge.Core.LedgerProjections do
   @spec query_json(String.t(), String.t()) :: {:ok, term()} | {:error, term()}
   def query_json(db_path, sql) when is_binary(db_path) and is_binary(sql) do
     LedgerSQLite.query_json(db_path, sql)
+  end
+
+  def query_json(db_path, sql, params) when is_binary(db_path) and is_binary(sql) and is_list(params) do
+    LedgerSQLite.query_json(db_path, sql, params)
   end
 
   defp replay_rows(_db_path, []), do: :ok
@@ -257,7 +261,8 @@ defmodule Eigenforge.Core.LedgerProjections do
   defp fetch_chain(db_path, correlation_id) do
     case LedgerSQLite.query_json(
            db_path,
-           "SELECT * FROM recent_control_chains WHERE correlation_id = #{sql_string(correlation_id)} LIMIT 1;"
+           "SELECT * FROM recent_control_chains WHERE correlation_id = ?1 LIMIT 1;",
+           [correlation_id]
          ) do
       {:ok, [row]} -> row
       _ -> %{}
@@ -267,7 +272,8 @@ defmodule Eigenforge.Core.LedgerProjections do
   defp fetch_room_state(db_path, room_id) do
     case LedgerSQLite.query_json(
            db_path,
-           "SELECT * FROM latest_room_control_state WHERE room_id = #{sql_string(room_id)} LIMIT 1;"
+           "SELECT * FROM latest_room_control_state WHERE room_id = ?1 LIMIT 1;",
+           [room_id]
          ) do
       {:ok, [row]} -> row
       _ -> %{}
@@ -282,21 +288,7 @@ defmodule Eigenforge.Core.LedgerProjections do
       policy_decision_id, policy_decision, command_id, effect_key,
       after_action_status, updated_at
     ) VALUES (
-      #{sql_string(row["correlation_id"])},
-      #{sql_nullable(row["room_id"])},
-      #{sql_nullable(row["started_at"])},
-      #{sql_nullable(row["latest_event_id"])},
-      #{sql_nullable(row["latest_event_type"])},
-      #{sql_nullable(row["snapshot_id"])},
-      #{sql_nullable(row["snapshot_hash"])},
-      #{sql_nullable(row["reasoner_outcome_id"])},
-      #{sql_nullable(row["reasoner_outcome"])},
-      #{sql_nullable(row["policy_decision_id"])},
-      #{sql_nullable(row["policy_decision"])},
-      #{sql_nullable(row["command_id"])},
-      #{sql_nullable(row["effect_key"])},
-      #{sql_nullable(row["after_action_status"])},
-      #{sql_nullable(row["updated_at"])}
+      ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
     )
     ON CONFLICT(correlation_id) DO UPDATE SET
       room_id = excluded.room_id,
@@ -315,7 +307,25 @@ defmodule Eigenforge.Core.LedgerProjections do
       updated_at = excluded.updated_at;
     """
 
-    case LedgerSQLite.query(db_path, sql) do
+    params = [
+      row["correlation_id"],
+      row["room_id"],
+      row["started_at"],
+      row["latest_event_id"],
+      row["latest_event_type"],
+      row["snapshot_id"],
+      row["snapshot_hash"],
+      row["reasoner_outcome_id"],
+      row["reasoner_outcome"],
+      row["policy_decision_id"],
+      row["policy_decision"],
+      row["command_id"],
+      row["effect_key"],
+      row["after_action_status"],
+      row["updated_at"]
+    ]
+
+    case LedgerSQLite.query(db_path, sql, params) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -332,30 +342,8 @@ defmodule Eigenforge.Core.LedgerProjections do
       co2_status, humidity_status,
       temperature_status, fan_status, command_lifecycle, updated_at
     ) VALUES (
-      #{sql_string(row["room_id"])},
-      #{sql_nullable(row["latest_snapshot_id"])},
-      #{sql_nullable(row["latest_snapshot_hash"])},
-      #{sql_nullable_int(row["co2_ppm"])},
-      #{sql_nullable_int(row["humidity_basis_points"])},
-      #{sql_nullable_int(row["temperature_millicelsius"])},
-      #{sql_nullable(row["fan_state"])},
-      #{sql_nullable(row["io_mode"])},
-      #{sql_nullable(row["connection_status"])},
-      #{sql_nullable(row["latest_reasoner_outcome_id"])},
-      #{sql_nullable(row["latest_policy_decision_id"])},
-      #{sql_nullable(row["latest_command_id"])},
-      #{sql_nullable(row["latest_after_action_id"])},
-      #{sql_nullable(row["pending_command_id"])},
-      #{sql_nullable(row["pending_effect_key"])},
-      #{sql_nullable(row["freshness"])},
-      #{sql_nullable_int(row["source_received_seq_fan"])},
-      #{sql_nullable_int(row["source_received_monotonic_ms_fan"])},
-      #{sql_nullable(row["co2_status"])},
-      #{sql_nullable(row["humidity_status"])},
-      #{sql_nullable(row["temperature_status"])},
-      #{sql_nullable(row["fan_status"])},
-      #{sql_nullable(row["command_lifecycle"])},
-      #{sql_nullable(row["updated_at"])}
+      ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+      ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
     )
     ON CONFLICT(room_id) DO UPDATE SET
       latest_snapshot_id = excluded.latest_snapshot_id,
@@ -383,7 +371,34 @@ defmodule Eigenforge.Core.LedgerProjections do
       updated_at = excluded.updated_at;
     """
 
-    case LedgerSQLite.query(db_path, sql) do
+    params = [
+      row["room_id"],
+      row["latest_snapshot_id"],
+      row["latest_snapshot_hash"],
+      row["co2_ppm"],
+      row["humidity_basis_points"],
+      row["temperature_millicelsius"],
+      row["fan_state"],
+      row["io_mode"],
+      row["connection_status"],
+      row["latest_reasoner_outcome_id"],
+      row["latest_policy_decision_id"],
+      row["latest_command_id"],
+      row["latest_after_action_id"],
+      row["pending_command_id"],
+      row["pending_effect_key"],
+      row["freshness"],
+      row["source_received_seq_fan"],
+      row["source_received_monotonic_ms_fan"],
+      row["co2_status"],
+      row["humidity_status"],
+      row["temperature_status"],
+      row["fan_status"],
+      row["command_lifecycle"],
+      row["updated_at"]
+    ]
+
+    case LedgerSQLite.query(db_path, sql, params) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -553,10 +568,4 @@ defmodule Eigenforge.Core.LedgerProjections do
 
   defp blank?(value), do: value in [nil, ""]
 
-  defp sql_string(value) when is_binary(value), do: "'#{String.replace(value, "'", "''")}'"
-  defp sql_nullable(nil), do: "NULL"
-  defp sql_nullable(""), do: "NULL"
-  defp sql_nullable(value) when is_binary(value), do: sql_string(value)
-  defp sql_nullable_int(nil), do: "NULL"
-  defp sql_nullable_int(value) when is_integer(value), do: Integer.to_string(value)
 end

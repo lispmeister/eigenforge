@@ -1,6 +1,6 @@
 ---
 id: eig-iz79
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T05:54:52Z

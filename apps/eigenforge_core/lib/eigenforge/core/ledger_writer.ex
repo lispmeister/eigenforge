@@ -17,6 +17,7 @@ defmodule Eigenforge.Core.LedgerWriter do
   alias Eigenforge.Core.LedgerSQLite
   alias Eigenforge.Core.LedgerTooling
   alias Eigenforge.Core.RuntimeConfig
+  alias Eigenforge.Mailbox.LedgerNotifier
 
   @signature_version "hmac-sha256-v1"
   @genesis_previous_hash "eigenforge-ledger-genesis-v1"
@@ -147,7 +148,8 @@ defmodule Eigenforge.Core.LedgerWriter do
          :ok <- LedgerSQLite.append_event(conn, event),
          :ok <- maybe_run_append_hook(state.append_hook, event),
          :ok <- LedgerProjections.apply_event(conn, event),
-         :ok <- LedgerSQLite.commit(conn) do
+         :ok <- LedgerSQLite.commit(conn),
+         :ok <- maybe_notify_committed_event(event) do
       {:ok, event}
     else
       {:error, reason} ->
@@ -168,6 +170,21 @@ defmodule Eigenforge.Core.LedgerWriter do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
       other -> {:error, {:append_hook_failed, other}}
+    end
+  end
+
+  defp maybe_notify_committed_event(%LedgerEvent{} = event) do
+    case event.event_type do
+      "command_envelope_issued" ->
+        _ = LedgerNotifier.publish(event)
+        :ok
+
+      "after_action_recorded" ->
+        _ = LedgerNotifier.publish(event)
+        :ok
+
+      _ ->
+        :ok
     end
   end
 

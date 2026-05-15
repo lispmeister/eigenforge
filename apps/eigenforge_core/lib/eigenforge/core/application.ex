@@ -14,9 +14,16 @@ defmodule Eigenforge.Core.Application do
   defp children(config, room_id) do
     [
       {Registry, keys: :duplicate, name: Eigenforge.Core.PubSub.Registry},
-      {Registry, keys: :duplicate, name: Eigenforge.Core.IoFaultStatus.Registry},
       {Eigenforge.Core.LedgerWriter, config},
-      {Eigenforge.Core.IoFaultStatus, config},
+      {Eigenforge.Core.FaultStatusSubscriber,
+       room_id: room_id,
+       db_path: config.core_db_path,
+       writer: Eigenforge.Core.LedgerWriter,
+       mailbox_receipt_store: Eigenforge.Mailbox.ReceiptStore,
+       after_action_observer: Eigenforge.Core.AfterActionObserver,
+       io_fault_status_registry: Eigenforge.IO.FaultStatus.Registry,
+       snapshot_subscriber: Eigenforge.Core.SnapshotSubscriber,
+       name: Eigenforge.Core.FaultStatusSubscriber},
       {Eigenforge.Core.SnapshotSubscriber,
        room_id: room_id,
        db_path: config.core_db_path,

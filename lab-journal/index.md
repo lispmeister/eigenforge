@@ -8,8 +8,8 @@ guidelines in *Writing the Laboratory Notebook*. It records engineering
 sessions, design decisions, experiments, failures, and verification results
 that do not fit cleanly into commit messages.
 
-**Last updated:** 2026-05-14
-**Total entries:** 7
+**Last updated:** 2026-05-15
+**Total entries:** 8
 **How to maintain:** Add one chronological row every time a journal file is
 created.
 
@@ -22,6 +22,7 @@ created.
 | 2026-05-12 | [journal-2026-05-12.md](journal-2026-05-12.md) | Completed remaining V1 test-gap tickets and verified the umbrella suite | Prototype V1 implementation |
 | 2026-05-14 | [journal-2026-05-14.md](journal-2026-05-14.md) | Six bug/task tickets: exqlite migration, dual stale-path events, all-room restart recovery, observe/2 snapshot status, core_node_id from opts, interpret_fault nil-default removal | Prototype V1 correctness |
 | 2026-05-14 | [journal-2026-05-14b.md](journal-2026-05-14b.md) | Fresh-eyes review: 7 implementation gaps (trace stale divergence, fan-seq columns, SQL parameterization, non-atomic writes, startup verification, redundant init, cond catch-all) and 3 spec ambiguities (no-op clause, stale payload type, effect_epoch definition); 10 tickets filed | Prototype V1 review |
+| 2026-05-15 | [journal-2026-05-15.md](journal-2026-05-15.md) | Finished the shortest V1 path, regenerated trace goldens, fixed a leaked test secret, and verified the full suite green | Prototype V1 completion |
 
 ## Attachments / Supporting Materials
 

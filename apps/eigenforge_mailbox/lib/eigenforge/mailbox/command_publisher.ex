@@ -3,6 +3,7 @@ defmodule Eigenforge.Mailbox.CommandPublisher do
   V1 mailbox publisher for signed command envelope deliveries.
   """
 
+  alias Eigenforge.Mailbox.ChannelManager
   alias Eigenforge.Mailbox.PubSubTransport
   alias Eigenforge.Mailbox.ReceiptStore
 
@@ -38,8 +39,7 @@ defmodule Eigenforge.Mailbox.CommandPublisher do
 
   @spec subscribe(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
   def subscribe(topic, opts \\ []) when is_binary(topic) do
-    registry = Keyword.get(opts, :registry_name, @default_registry)
-    Registry.register(registry, topic, [])
+    ChannelManager.subscribe(topic, opts)
   end
 
   @spec mark_io_accepted(String.t(), map(), keyword()) :: :ok | {:error, term()}

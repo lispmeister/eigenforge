@@ -1,6 +1,6 @@
 ---
 id: eig-jyj0
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T07:44:42Z

@@ -3,11 +3,14 @@ defmodule Eigenforge.Dashboard.DashboardLive do
 
   alias Eigenforge.Core.Redaction
   alias Eigenforge.Dashboard.DashboardState
+  alias Eigenforge.Mailbox.LedgerNotifier
 
   @refresh_ms 1_000
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket), do: subscribe_to_ledger_notifier()
+
     if connected?(socket), do: schedule_refresh()
 
     {:ok,
@@ -21,6 +24,11 @@ defmodule Eigenforge.Dashboard.DashboardLive do
   @impl true
   def handle_info(:refresh, socket) do
     schedule_refresh()
+    {:noreply, load_state(socket)}
+  end
+
+  @impl true
+  def handle_info({:mailbox_command, "ledger_events:committed", %{"notification" => _notification}}, socket) do
     {:noreply, load_state(socket)}
   end
 
@@ -298,6 +306,10 @@ defmodule Eigenforge.Dashboard.DashboardLive do
   end
 
   defp schedule_refresh, do: Process.send_after(self(), :refresh, @refresh_ms)
+
+  defp subscribe_to_ledger_notifier do
+    _ = LedgerNotifier.subscribe()
+  end
 
   defp dash(nil), do: "not_yet_observed"
   defp dash(""), do: "not_yet_observed"
