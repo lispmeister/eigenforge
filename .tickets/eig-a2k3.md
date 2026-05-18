@@ -1,6 +1,6 @@
 ---
 id: eig-a2k3
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T07:44:33Z

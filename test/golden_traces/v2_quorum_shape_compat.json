@@ -1,0 +1,89 @@
+{
+  "trace_id": "trace-v2-quorum-shape-compat",
+  "fixture": "v2_quorum_shape_compat",
+  "core_node_id": "core_a",
+  "ledger_backend": "local_sqlite",
+  "consensus_status": "quorum_finalized",
+  "coverage": {
+    "step_ids": [
+      "OODA-V1-001",
+      "OODA-V1-002",
+      "OODA-V1-003",
+      "OODA-V1-004",
+      "OODA-V1-005",
+      "OODA-V1-006",
+      "OODA-V1-007",
+      "OODA-V1-008"
+    ],
+    "trace_ids": ["TRACE-V1-V2-QUORUM-SHAPE-COMPAT"]
+  },
+  "ledger_events": [
+    {
+      "sequence": 2,
+      "event_id": "event-v2-quorum-2",
+      "event_type": "command_envelope_issued",
+      "core_node_id": "core_a",
+      "consensus_decision_id": "consensus-v2-quorum-1",
+      "consensus_status": "quorum_finalized",
+      "quorum_ref": {
+        "quorum_id": "quorum-v2-1",
+        "proposed_action_or_no_action": "propose_action",
+        "supporting_core_node_ids": ["core_a", "core_b"],
+        "supporting_vote_ids": ["vote-a", "vote-b"],
+        "supporting_vote_hashes": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "io_node_id": "io_a",
+        "finalized_at": "2026-05-08T12:00:00.000Z"
+      },
+      "causation_id": "ledger-genesis-core_a",
+      "correlation_id": "correlation-v2-quorum-1",
+      "subject": "core_rule_stub",
+      "source_app": "eigenforge_core",
+      "occurred_at": "2026-05-08T12:00:00.000Z",
+      "observed_at": "2026-05-08T12:00:00.000Z",
+      "persisted_at": "2026-05-08T12:00:00.000Z",
+      "format_version": "json-canonical-v1",
+      "schema_id": "eigenforge.ledger_event",
+      "schema_version": 1,
+      "payload": {
+        "format_version": "json-canonical-v1",
+        "schema_id": "eigenforge.command_envelope",
+        "schema_version": 1,
+        "action": "command_actuator",
+        "capability_event_id": "event-capability-v2",
+        "command_id": "cmd-v2-quorum-2",
+        "decision_event_id": "event-v2-decision-2",
+        "effect_key": "effect:v1:v2-quorum-1",
+        "expires_at": "2026-05-08T12:00:05.000Z",
+        "idempotency_key": "idem:v1:v2-quorum-1",
+        "issued_at": "2026-05-08T12:00:00.000Z",
+        "payload_hash": "placeholder",
+        "policy_decision_id": "policy-v2-quorum-1",
+        "reasoner_outcome_event_id": "event-reasoner-v2",
+        "requested_state": "on",
+        "scope": "room:placeholder",
+        "signature_version": "hmac-sha256-v1",
+        "signature": "",
+        "snapshot_id": "snap-v2-quorum-1",
+        "snapshot_seq": 1,
+        "subject": "core_rule_stub",
+        "target": "actuator:fan"
+      },
+      "payload_hash": "",
+      "previous_event_hash": "eigenforge-ledger-genesis-v1",
+      "event_hash": "",
+      "signature_version": "hmac-sha256-v1",
+      "signature": ""
+    }
+  ],
+  "verification": {
+    "ledger_hash_chain_valid": true,
+    "local_ledger_committed": true,
+    "consensus_status_valid": true,
+    "command_delivery_after_local_commit": true,
+    "delivery_receipt_valid": true,
+    "after_action_core_authored": true
+  }
+}

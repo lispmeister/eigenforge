@@ -46,6 +46,7 @@ defmodule Eigenforge.Core.LedgerSQLite do
     @impl true
     def init(opts) do
       db_path = Keyword.fetch!(opts, :db_path)
+
       case open_and_init(db_path) do
         {:ok, conn} -> {:ok, %{db_path: db_path, conn: conn}}
         {:error, reason} -> {:stop, reason}
@@ -279,7 +280,7 @@ defmodule Eigenforge.Core.LedgerSQLite do
           signature_version TEXT NOT NULL,
           signature TEXT NOT NULL,
           CHECK (sequence >= 1),
-          CHECK (quorum_ref = '{}'),
+          CHECK (json_valid(quorum_ref)),
           CHECK (
             sequence <> 1 OR (
               event_type = 'ledger_genesis' AND
@@ -371,7 +372,8 @@ defmodule Eigenforge.Core.LedgerSQLite do
     execute_conn(conn, sql)
   end
 
-  def query(db_path, sql, params) when is_binary(db_path) and is_binary(sql) and is_list(params) do
+  def query(db_path, sql, params)
+      when is_binary(db_path) and is_binary(sql) and is_list(params) do
     case call_connection(db_path, {:query, sql, params}) do
       :ok -> {:ok, ""}
       other -> other
@@ -391,7 +393,8 @@ defmodule Eigenforge.Core.LedgerSQLite do
     query_json_conn(conn, sql, [])
   end
 
-  def query_json(db_path, sql, params) when is_binary(db_path) and is_binary(sql) and is_list(params) do
+  def query_json(db_path, sql, params)
+      when is_binary(db_path) and is_binary(sql) and is_list(params) do
     call_connection(db_path, {:query_json, sql, params})
   end
 
@@ -412,13 +415,18 @@ defmodule Eigenforge.Core.LedgerSQLite do
     ensure_supervisor_started()
 
     case Registry.lookup(@registry, db_path) do
-      [{pid, _value}] when is_pid(pid) -> {:ok, pid}
+      [{pid, _value}] when is_pid(pid) ->
+        {:ok, pid}
+
       [] ->
         spec = {Connection, [db_path: db_path, name: via_name(db_path)]}
 
         case DynamicSupervisor.start_child(@supervisor, spec) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
+          {:ok, pid} ->
+            {:ok, pid}
+
+          {:error, {:already_started, pid}} ->
+            {:ok, pid}
 
           {:error, reason} ->
             {:error, {:sqlite_connection_failed, reason}}

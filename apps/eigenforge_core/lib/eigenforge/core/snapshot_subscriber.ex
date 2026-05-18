@@ -245,7 +245,11 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   end
 
   defp maybe_observe_snapshot(snapshot, state) do
-    LedgerProjections.observe_snapshot(state.db_path, snapshot, io_mode: state.io_mode)
+    if is_nil(state.db_path) do
+      :ok
+    else
+      LedgerProjections.observe_snapshot(state.db_path, snapshot, io_mode: state.io_mode)
+    end
   end
 
   defp maybe_resolve_pending_from_snapshot(snapshot, state) do
@@ -456,17 +460,21 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
   end
 
   defp fetch_room_state(%{db_path: db_path, room_id: room_id}) do
-    sql = """
-    SELECT *
-    FROM latest_room_control_state
-    WHERE room_id = ?1
-    LIMIT 1;
-    """
+    if is_nil(db_path) do
+      {:ok, nil}
+    else
+      sql = """
+      SELECT *
+      FROM latest_room_control_state
+      WHERE room_id = ?1
+      LIMIT 1;
+      """
 
-    case LedgerProjections.query_json(db_path, sql, [room_id]) do
-      {:ok, [row]} -> {:ok, row}
-      {:ok, []} -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
+      case LedgerProjections.query_json(db_path, sql, [room_id]) do
+        {:ok, [row]} -> {:ok, row}
+        {:ok, []} -> {:ok, nil}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -730,6 +738,7 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
 
   defp event_type(%Eigenforge.Contracts.ReasonerOutcome{}), do: "reasoner_outcome_recorded"
   defp event_type(%Eigenforge.Contracts.CapabilityCheck{}), do: "capability_check_recorded"
+
   defp event_type(%Eigenforge.Contracts.PolicyDecision{decision: "deny_stale_snapshot"}),
     do: "stale_snapshot_denied"
 
@@ -803,10 +812,14 @@ defmodule Eigenforge.Core.SnapshotSubscriber do
 
   defp nominal_snapshot_unchanged?(snapshot, room_state) do
     snapshot_fan = Map.get(snapshot, :fan_state) || Map.get(snapshot, "fan_state")
-    snapshot_source_status = Map.get(snapshot, :source_status) || Map.get(snapshot, "source_status") || %{}
+
+    snapshot_source_status =
+      Map.get(snapshot, :source_status) || Map.get(snapshot, "source_status") || %{}
+
     snapshot_co2 = Map.get(snapshot_source_status, :co2) || Map.get(snapshot_source_status, "co2")
 
     snapshot_freshness = Map.get(snapshot, :freshness) || Map.get(snapshot, "freshness")
+
     snapshot_pending_command_id =
       Map.get(snapshot, :pending_command_id) || Map.get(snapshot, "pending_command_id")
 

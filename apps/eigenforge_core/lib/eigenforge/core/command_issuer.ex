@@ -7,6 +7,7 @@ defmodule Eigenforge.Core.CommandIssuer do
   alias Eigenforge.Contracts.CommandEnvelope
   alias Eigenforge.Contracts.PolicyDecision
   alias Eigenforge.Contracts.ReasonerOutcome
+  alias Eigenforge.Contracts.SignedProposal
   alias Eigenforge.Core.CanonicalTime
   alias Eigenforge.Core.TraceIdentity
 
@@ -94,6 +95,88 @@ defmodule Eigenforge.Core.CommandIssuer do
   end
 
   def issue(_reasoner, _capability, _policy, _snapshot, _secret, _opts), do: {:ok, nil}
+
+  @spec issue_signed_proposal(
+          ReasonerOutcome.t(),
+          term(),
+          PolicyDecision.t(),
+          term(),
+          binary(),
+          [issue_opt()]
+        ) :: {:ok, SignedProposal.t()} | {:ok, nil}
+  def issue_signed_proposal(reasoner, capability, policy, snapshot, secret, opts \\ [])
+
+  def issue_signed_proposal(
+        %ReasonerOutcome{} = reasoner,
+        _capability,
+        %PolicyDecision{} = policy,
+        snapshot,
+        secret,
+        opts
+      )
+      when reasoner.outcome_type in ["propose_action", "propose_no_action"] do
+    issued_at = timestamp()
+    core_node_id = Keyword.get(opts, :core_node_id, @core_node_id)
+
+    consensus_decision_id =
+      Keyword.get_lazy(opts, :consensus_decision_id, fn ->
+        TraceIdentity.stable_id("consensus", [snapshot.snapshot_id])
+      end)
+
+    proposal_kind =
+      case reasoner.outcome_type do
+        "propose_action" -> "action"
+        "propose_no_action" -> "no_action"
+      end
+
+    base = %{
+      proposal_id:
+        TraceIdentity.stable_id("proposal", [
+          snapshot.snapshot_id,
+          reasoner.outcome_type,
+          core_node_id,
+          consensus_decision_id,
+          reasoner.reasoner_outcome_id,
+          policy.policy_decision_id
+        ]),
+      proposal_kind: proposal_kind,
+      normalized_outcome: reasoner.outcome_type,
+      core_node_id: core_node_id,
+      consensus_decision_id: consensus_decision_id,
+      snapshot_id: snapshot.snapshot_id,
+      snapshot_seq: snapshot.snapshot_seq,
+      snapshot_hash: snapshot.snapshot_hash,
+      subject: @subject,
+      target: @target,
+      action: if(proposal_kind == "action", do: @action, else: "no_command"),
+      scope: @scope,
+      requested_state: reasoner.requested_state,
+      idempotency_key:
+        idempotency_key(snapshot, reasoner, policy, consensus_decision_id, core_node_id),
+      issued_at: issued_at,
+      reasoner_outcome_id: reasoner.reasoner_outcome_id,
+      policy_decision_id: policy.policy_decision_id,
+      payload_hash: "",
+      signature_version: @signature_version,
+      signature: ""
+    }
+
+    payload_hash = Contracts.hash_excluding(base, [:payload_hash, :signature])
+    unsigned = %{base | payload_hash: payload_hash}
+
+    signature =
+      Contracts.sign_hmac_excluding(
+        unsigned,
+        secret,
+        [:signature],
+        "eigenforge:v1:signed_proposal"
+      )
+
+    {:ok, SignedProposal.new!(%{unsigned | signature: signature})}
+  end
+
+  def issue_signed_proposal(_reasoner, _capability, _policy, _snapshot, _secret, _opts),
+    do: {:ok, nil}
 
   defp idempotency_key(snapshot, reasoner, policy, consensus_decision_id, core_node_id) do
     payload = %{

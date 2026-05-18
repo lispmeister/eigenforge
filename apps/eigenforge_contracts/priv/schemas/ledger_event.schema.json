@@ -47,7 +47,8 @@
         "command_envelope_issued",
         "after_action_recorded",
         "stale_snapshot_denied",
-        "node_fault_observed"
+        "node_fault_observed",
+        "quorum_finalized"
       ]
     },
     "core_node_id": { "type": "string" },

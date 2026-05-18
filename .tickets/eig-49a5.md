@@ -1,6 +1,6 @@
 ---
 id: eig-49a5
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-15T13:29:32Z

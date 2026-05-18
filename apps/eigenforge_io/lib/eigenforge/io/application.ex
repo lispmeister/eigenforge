@@ -7,7 +7,10 @@ defmodule Eigenforge.IO.Application do
   def start(_type, _args) do
     with {:ok, config} <- Eigenforge.Core.RuntimeConfig.load(),
          :ok <- validate_startup_inputs(config) do
-      Supervisor.start_link(children(config), strategy: :one_for_one, name: Eigenforge.IO.Supervisor)
+      Supervisor.start_link(children(config),
+        strategy: :one_for_one,
+        name: Eigenforge.IO.Supervisor
+      )
     end
   end
 
@@ -16,7 +19,9 @@ defmodule Eigenforge.IO.Application do
       {Registry, keys: :duplicate, name: Eigenforge.IO.FaultStatus.Registry},
       {Eigenforge.IO.FaultStatus, config},
       {Eigenforge.IO.CommandExecutionStore,
-       path: config.io_command_store_path, name: Eigenforge.IO.CommandExecutionStore},
+       path: config.io_command_store_path,
+       secret: config.hmac_secret,
+       name: Eigenforge.IO.CommandExecutionStore},
       {Eigenforge.IO.AdapterSupervisor, config}
     ]
 
@@ -25,7 +30,9 @@ defmodule Eigenforge.IO.Application do
       {Registry, keys: :duplicate, name: Eigenforge.IO.FaultStatus.Registry},
       {Eigenforge.IO.FaultStatus, config},
       {Eigenforge.IO.CommandExecutionStore,
-       path: config.io_command_store_path, name: Eigenforge.IO.CommandExecutionStore},
+       path: config.io_command_store_path,
+       secret: config.hmac_secret,
+       name: Eigenforge.IO.CommandExecutionStore},
       {Eigenforge.IO.AdapterSupervisor, config}
     ]
 

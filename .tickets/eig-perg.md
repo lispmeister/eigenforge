@@ -1,6 +1,6 @@
 ---
 id: eig-perg
-status: open
+status: closed
 deps: [eig-67tz]
 links: []
 created: 2026-05-15T13:30:32Z

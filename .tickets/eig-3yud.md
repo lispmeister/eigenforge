@@ -1,6 +1,6 @@
 ---
 id: eig-3yud
-status: open
+status: closed
 deps: [eig-dfz1]
 links: []
 created: 2026-05-15T13:29:32Z

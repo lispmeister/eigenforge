@@ -7,6 +7,7 @@ defmodule Eigenforge.ContractsTest do
   alias Eigenforge.Contracts.DeliveryReceipt
   alias Eigenforge.Contracts.DeviceInventory
   alias Eigenforge.Contracts.ReasonerOutcome
+  alias Eigenforge.Contracts.SignedProposal
 
   test "canonical json sorts keys and preserves forward slashes" do
     assert Contracts.canonical_json(%{"b" => 1, "a" => "https://example.com/a/b"}) ==
@@ -51,9 +52,66 @@ defmodule Eigenforge.ContractsTest do
     refute Map.has_key?(Contracts.signable_map(receipt), "payload_hash")
   end
 
+  test "signed proposal schema validates action and no-action shapes" do
+    proposal =
+      SignedProposal.new!(%{
+        proposal_id: "proposal-1",
+        proposal_kind: "action",
+        normalized_outcome: "propose_action",
+        core_node_id: "core_a",
+        consensus_decision_id: "consensus-1",
+        snapshot_id: "snap-1",
+        snapshot_seq: 1,
+        snapshot_hash: String.duplicate("a", 64),
+        subject: "core_rule_stub",
+        target: "actuator:fan",
+        action: "command_actuator",
+        scope: "room:placeholder",
+        requested_state: "on",
+        idempotency_key: "idem:v1:proposal-1",
+        issued_at: "2026-05-08T12:00:00.000Z",
+        reasoner_outcome_id: "reasoner-1",
+        policy_decision_id: "policy-1",
+        payload_hash: String.duplicate("b", 64),
+        signature_version: "hmac-sha256-v1",
+        signature: "placeholder"
+      })
+
+    assert SignedProposal.validate(proposal) == :ok
+
+    no_action =
+      SignedProposal.new!(%{
+        proposal_id: "proposal-2",
+        proposal_kind: "no_action",
+        normalized_outcome: "propose_no_action",
+        core_node_id: "core_b",
+        consensus_decision_id: "consensus-2",
+        snapshot_id: "snap-2",
+        snapshot_seq: 2,
+        snapshot_hash: String.duplicate("c", 64),
+        subject: "core_rule_stub",
+        target: "actuator:fan",
+        action: "no_command",
+        scope: "room:placeholder",
+        requested_state: nil,
+        idempotency_key: "idem:v1:proposal-2",
+        issued_at: "2026-05-08T12:00:00.000Z",
+        reasoner_outcome_id: "reasoner-2",
+        policy_decision_id: "policy-2",
+        payload_hash: String.duplicate("d", 64),
+        signature_version: "hmac-sha256-v1",
+        signature: "placeholder"
+      })
+
+    assert SignedProposal.validate(no_action) == :ok
+  end
+
   test "canonical signing rejects floats" do
     assert_raise ArgumentError, ~r/floats are not allowed/, fn ->
-      Contracts.sign_hmac(%{"schema_id" => "eigenforge.command_envelope", "value" => 12.5}, "secret")
+      Contracts.sign_hmac(
+        %{"schema_id" => "eigenforge.command_envelope", "value" => 12.5},
+        "secret"
+      )
     end
   end
 

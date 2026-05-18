@@ -114,7 +114,10 @@ defmodule Eigenforge.Core.BootstrapTest do
     config: config
   } do
     assert {:ok, _} = Bootstrap.validate(config)
-    assert {:ok, _} = LedgerSQLite.query(config.core_db_path, "DROP TRIGGER ledger_events_no_update;")
+
+    assert {:ok, _} =
+             LedgerSQLite.query(config.core_db_path, "DROP TRIGGER ledger_events_no_update;")
+
     assert {:ok, [%{"event_hash" => genesis_hash, "event_id" => genesis_event_id}]} =
              LedgerSQLite.query_json(
                config.core_db_path,
@@ -179,7 +182,10 @@ defmodule Eigenforge.Core.BootstrapTest do
                """
              )
 
-    assert {:error, {:bad_payload_schema, "eigenforge.reasoner_outcome", "eigenforge.reasoner_outcome", 2, "json-canonical-v1"}} =
+    assert {:error,
+            {"INV-10",
+             {:bad_payload_schema, "eigenforge.reasoner_outcome", "eigenforge.reasoner_outcome",
+              2, "json-canonical-v1"}}} =
              Bootstrap.validate(config)
   end
 
@@ -191,7 +197,8 @@ defmodule Eigenforge.Core.BootstrapTest do
 
     File.write!(
       bad_fixture,
-      ~s({"fixture_schema_id":"eigenforge.simulator_fixture","fixture_schema_version":2,"scenario_id":"bad-sim","snapshot_id":"snap-bad","snapshot_seq":1,"room_id":"placeholder","co2_ppm":1200,"fan_state":"off","source_entity_ids":{},"source_observation_ids":{},"source_observed_at":{},"source_received_seq":{},"source_received_monotonic_ms":{},"source_status":{},"normalized_at":"2026-05-08T12:00:00.000Z","freshness":"fresh"}) <> "\n"
+      ~s({"fixture_schema_id":"eigenforge.simulator_fixture","fixture_schema_version":2,"scenario_id":"bad-sim","snapshot_id":"snap-bad","snapshot_seq":1,"room_id":"placeholder","co2_ppm":1200,"fan_state":"off","source_entity_ids":{},"source_observation_ids":{},"source_observed_at":{},"source_received_seq":{},"source_received_monotonic_ms":{},"source_status":{},"normalized_at":"2026-05-08T12:00:00.000Z","freshness":"fresh"}) <>
+        "\n"
     )
 
     assert {:error, {:invalid_fixture, ^bad_fixture, {:unsupported_fixture_schema_version, 2}}} =

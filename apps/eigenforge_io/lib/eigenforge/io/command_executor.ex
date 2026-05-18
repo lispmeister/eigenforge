@@ -13,23 +13,13 @@ defmodule Eigenforge.IO.CommandExecutor do
   def execute(%{"command" => command, "receipt" => receipt}, state)
       when is_map(command) and is_map(receipt) do
     with :ok <- verify_delivery(command, receipt, state),
-         {:ok, result} <- execute(command, state),
-         :ok <-
-           CommandPublisher.mark_io_accepted(
-             receipt["receipt_id"],
-             %{
-               accepted_at: timestamp(state),
-               accepted_monotonic_ms: current_monotonic_ms(state)
-             },
-             receipt_store: state.mailbox_receipt_store
-           ) do
+         {:ok, result} <- dispatch_command(command, Map.put(state, :current_command, command)),
+         :ok <- maybe_mark_io_accepted(receipt["receipt_id"], state) do
       {:ok, result}
     end
   end
 
-  def execute(command, state) when is_map(command) do
-    dispatch_command(command, Map.put(state, :current_command, command))
-  end
+  def execute(_command, _state), do: {:error, :missing_delivery_receipt}
 
   defp verify_delivery(command, receipt, state) do
     cond do
@@ -124,6 +114,19 @@ defmodule Eigenforge.IO.CommandExecutor do
 
   defp maybe_notify_command_observer(pid, request, result) when is_pid(pid),
     do: send(pid, {:transport_command, request, result})
+
+  defp maybe_mark_io_accepted(_receipt_id, %{mailbox_receipt_store: nil}), do: :ok
+
+  defp maybe_mark_io_accepted(receipt_id, state) do
+    CommandPublisher.mark_io_accepted(
+      receipt_id,
+      %{
+        accepted_at: timestamp(state),
+        accepted_monotonic_ms: current_monotonic_ms(state)
+      },
+      receipt_store: state.mailbox_receipt_store
+    )
+  end
 
   defp timestamp(state) do
     state

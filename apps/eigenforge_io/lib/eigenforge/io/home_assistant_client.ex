@@ -12,13 +12,17 @@ defmodule Eigenforge.IO.HomeAssistantClient do
   alias Eigenforge.Core.PubSub
   alias Eigenforge.Core.RuntimeConfig
   alias Eigenforge.Core.SignedConfig
+  alias Eigenforge.Core.TraceIdentity
   alias Eigenforge.IO.CommandExecutor
   alias Eigenforge.IO.FaultStatus
+  alias Eigenforge.IO.ProposalQuorumJudge
   alias Eigenforge.Mailbox.ChannelManager
   alias Eigenforge.IO.HomeAssistantAdapter
 
   @default_server __MODULE__
   @commands_topic "commands:io"
+  @signed_proposals_topic "signed_proposals:io"
+  @quorum_finalized_topic "quorum_finalized:io"
 
   @spec start_link(RuntimeConfig.t() | keyword()) :: GenServer.on_start()
   def start_link(%RuntimeConfig{} = config) do
@@ -32,6 +36,8 @@ defmodule Eigenforge.IO.HomeAssistantClient do
       mailbox_registry: Eigenforge.Mailbox.Registry,
       mailbox_receipt_store: Eigenforge.Mailbox.ReceiptStore,
       command_execution_store: Eigenforge.IO.CommandExecutionStore,
+      proposal_observer: nil,
+      proposal_quorum: nil,
       transport: Eigenforge.IO.HomeAssistantTransport.Live,
       name: @default_server
     )
@@ -65,6 +71,7 @@ defmodule Eigenforge.IO.HomeAssistantClient do
     home_assistant = Keyword.fetch!(opts, :home_assistant)
     mailbox_registry = Keyword.get(opts, :mailbox_registry, Eigenforge.Mailbox.Registry)
     {:ok, _} = ChannelManager.subscribe(@commands_topic, registry_name: mailbox_registry)
+    {:ok, _} = ChannelManager.subscribe(@signed_proposals_topic, registry_name: mailbox_registry)
 
     state = %{
       room_id: Keyword.fetch!(opts, :room_id),
@@ -78,6 +85,8 @@ defmodule Eigenforge.IO.HomeAssistantClient do
         Keyword.get(opts, :mailbox_receipt_store, Eigenforge.Mailbox.ReceiptStore),
       command_execution_store:
         Keyword.get(opts, :command_execution_store, Eigenforge.IO.CommandExecutionStore),
+      proposal_observer: Keyword.get(opts, :proposal_observer),
+      proposal_quorum: ProposalQuorumJudge.new(Keyword.fetch!(opts, :hmac_secret)),
       transport: Keyword.get(opts, :transport, __MODULE__.Transport.Noop),
       command_observer: Keyword.get(opts, :command_observer),
       utc_now: Keyword.get(opts, :utc_now, &DateTime.utc_now/0),
@@ -264,6 +273,39 @@ defmodule Eigenforge.IO.HomeAssistantClient do
     {:noreply, next_state}
   end
 
+  def handle_info({:mailbox_signed_proposal, @signed_proposals_topic, proposal}, state)
+      when is_map(proposal) do
+    state =
+      if is_pid(state.proposal_observer) do
+        send(state.proposal_observer, {:signed_proposal, proposal})
+        state
+      else
+        state
+      end
+
+    case ProposalQuorumJudge.ingest(state.proposal_quorum, proposal) do
+      {:ok, next_quorum, {:pending, _summary}} ->
+        {:noreply, %{state | proposal_quorum: next_quorum}}
+
+      {:ok, next_quorum, {:ignored, _summary}} ->
+        {:noreply, %{state | proposal_quorum: next_quorum}}
+
+      {:ok, next_quorum, {:rejected, reason, summary}} ->
+        _ = record_quorum_rejection(state, reason, summary)
+        {:noreply, %{state | proposal_quorum: next_quorum}}
+
+      {:ok, next_quorum, {:quorum, :deny, evidence}} ->
+        _ = publish_quorum_evidence(state, evidence)
+        {:noreply, %{state | proposal_quorum: next_quorum}}
+
+      {:ok, next_quorum, {:quorum, :allow, evidence}} ->
+        {execution_result, execution_state} = execute_quorum_vote(state, evidence)
+        evidence = Map.put(evidence, :execution_result, execution_result)
+        _ = publish_quorum_evidence(execution_state, evidence)
+        {:noreply, %{execution_state | proposal_quorum: next_quorum}}
+    end
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
 
   defp connect_transport(state) do
@@ -329,6 +371,165 @@ defmodule Eigenforge.IO.HomeAssistantClient do
         "target" => command["target"]
       }
     })
+  end
+
+  defp record_quorum_rejection(state, reason, summary) do
+    fault_type =
+      case reason do
+        :invalid_vote_signature -> "invalid_command_signature"
+        :duplicate_proposal -> "duplicate_idempotency_key"
+        :invalid_vote_shape -> "adapter_rejected"
+        :mismatched_vote -> "adapter_rejected"
+        :invalid_signed_proposal -> "adapter_rejected"
+        _ -> "adapter_rejected"
+      end
+
+    FaultStatus.record(state.io_fault_status, %{
+      source: "home_assistant",
+      room_id: state.room_id,
+      fault_type: fault_type,
+      message: inspect(reason),
+      audit: true,
+      ooda_relevant: true,
+      metadata: %{
+        "proposal_id" => summary.proposal_id,
+        "core_node_id" => summary.core_node_id,
+        "consensus_decision_id" => summary.consensus_decision_id,
+        "idempotency_key" => summary.idempotency_key
+      }
+    })
+  end
+
+  defp maybe_notify_command_observer(nil, _request, _result), do: :ok
+
+  defp maybe_notify_command_observer(pid, request, result) when is_pid(pid),
+    do: send(pid, {:transport_command, request, result})
+
+  defp publish_quorum_evidence(state, evidence) do
+    if is_pid(state.proposal_observer) do
+      send(state.proposal_observer, {:quorum_evidence, evidence})
+    end
+
+    _ =
+      ChannelManager.dispatch(
+        @quorum_finalized_topic,
+        quorum_finalized_payload(state, evidence),
+        registry_name: state.mailbox_registry
+      )
+
+    :ok
+  end
+
+  defp quorum_finalized_payload(state, evidence) do
+    execution_result = Map.get(evidence, :execution_result) || Map.get(evidence, "execution_result")
+
+    %{
+      "room_id" => state.room_id,
+      "quorum_id" => evidence.quorum_id,
+      "consensus_decision_id" => evidence.consensus_decision_id,
+      "idempotency_key" => evidence.idempotency_key,
+      "target" => evidence.target,
+      "requested_state" => evidence.requested_state,
+      "decision" => Atom.to_string(evidence.decision),
+      "vote_count" => evidence.vote_count,
+      "proposal_ids" => evidence.proposal_ids,
+      "core_node_ids" => evidence.core_node_ids,
+      "votes" => Enum.map(evidence.votes, &quorum_vote_payload/1),
+      "execution_status" => execution_status_for(execution_result),
+      "published_at" => timestamp(state)
+    }
+  end
+
+  defp quorum_vote_payload(vote) do
+    %{
+      "proposal_id" => vote.proposal_id,
+      "core_node_id" => vote.core_node_id,
+      "consensus_decision_id" => vote.consensus_decision_id,
+      "idempotency_key" => vote.idempotency_key,
+      "normalized_outcome" => vote.normalized_outcome,
+      "proposal_kind" => vote.proposal_kind,
+      "target" => vote.target,
+      "requested_state" => vote.requested_state
+    }
+  end
+
+  defp execution_status_for({:ok, _result}), do: "executed"
+  defp execution_status_for({:error, _reason}), do: "execution_failed"
+  defp execution_status_for(_other), do: "not_executed"
+
+  defp execute_quorum_vote(state, evidence) do
+    idempotency_key = evidence.idempotency_key
+
+    cond do
+      not state.connected? ->
+        _ =
+          record_fault(state, "not_connected", :not_connected, %{
+            "command_id" => evidence.quorum_id,
+            "target" => evidence.target
+          })
+
+        {{:error, :not_connected}, state}
+
+      not state.physical_control_enabled? ->
+        _ =
+          record_fault(state, "physical_control_disabled", :physical_control_disabled, %{
+            "command_id" => evidence.quorum_id,
+            "target" => evidence.target
+          })
+
+        {{:error, :physical_control_disabled}, state}
+
+      Eigenforge.IO.CommandExecutionStore.already_executed?(
+        state.command_execution_store,
+        idempotency_key
+      ) ->
+        _ =
+          record_quorum_rejection(state, :duplicate_proposal, %{
+            proposal_id: evidence.quorum_id,
+            core_node_id: "quorum",
+            consensus_decision_id: evidence.consensus_decision_id,
+            idempotency_key: idempotency_key
+          })
+
+        {{:error, :duplicate_idempotency_key}, state}
+
+      true ->
+        with {:ok, request} <-
+               HomeAssistantAdapter.command_request(
+                 state.home_assistant.entity_ids.fan,
+                 evidence.requested_state
+               ),
+             {:ok, result} <- state.transport.command(state.conn, request),
+             :ok <-
+               Eigenforge.IO.CommandExecutionStore.record(state.command_execution_store, %{
+                 idempotency_key: idempotency_key,
+                 command_id:
+                   TraceIdentity.stable_id("quorum-command", [evidence.consensus_decision_id]),
+                 effect_key:
+                   TraceIdentity.stable_id("quorum-effect", [
+                     evidence.consensus_decision_id,
+                     idempotency_key
+                   ]),
+                 target: evidence.target,
+                 requested_state: evidence.requested_state,
+                 adapter_attempt_id:
+                   TraceIdentity.stable_id("adapter-attempt", [evidence.consensus_decision_id]),
+                 execution_status: "io_accepted",
+                 recorded_at: timestamp(state)
+               }) do
+          maybe_notify_command_observer(state.command_observer, request, result)
+          {{:ok, result}, state}
+        else
+          {:error, reason} ->
+            _ =
+              record_fault(state, fault_type_for_reason(reason), reason, %{
+                "command_id" => evidence.quorum_id,
+                "target" => evidence.target
+              })
+
+            {{:error, reason}, state}
+        end
+    end
   end
 
   defp fault_type_for_reason(:command_expired), do: "command_expired"

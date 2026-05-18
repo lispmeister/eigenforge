@@ -2,6 +2,7 @@ defmodule Eigenforge.IO.SimulatorClientTest do
   use ExUnit.Case, async: true
 
   alias Eigenforge.Core.IoFaultStatus
+  alias Eigenforge.Core.FaultStatusSubscriber
   alias Eigenforge.Core.LedgerSQLite
   alias Eigenforge.Core.LedgerWriter
   alias Eigenforge.Core.SnapshotSubscriber
@@ -14,12 +15,23 @@ defmodule Eigenforge.IO.SimulatorClientTest do
     db_path = Path.join(dir, "core.sqlite3")
     log_path = Path.join(dir, "io_fault_status.log")
     fixtures_dir = Path.expand("../../../../../config/simulator_snapshots", __DIR__)
-    pubsub_registry = Module.concat(__MODULE__, "CoreRegistry#{System.unique_integer([:positive])}")
-    mailbox_registry = Module.concat(__MODULE__, "MailboxRegistry#{System.unique_integer([:positive])}")
-    fault_registry = Module.concat(__MODULE__, "FaultRegistry#{System.unique_integer([:positive])}")
-    receipt_store_name = Module.concat(__MODULE__, "ReceiptStore#{System.unique_integer([:positive])}")
+
+    pubsub_registry =
+      Module.concat(__MODULE__, "CoreRegistry#{System.unique_integer([:positive])}")
+
+    mailbox_registry =
+      Module.concat(__MODULE__, "MailboxRegistry#{System.unique_integer([:positive])}")
+
+    fault_registry =
+      Module.concat(__MODULE__, "FaultRegistry#{System.unique_integer([:positive])}")
+
+    receipt_store_name =
+      Module.concat(__MODULE__, "ReceiptStore#{System.unique_integer([:positive])}")
+
     subscriber_name = Module.concat(__MODULE__, "Subscriber#{System.unique_integer([:positive])}")
-    io_fault_status_name = Module.concat(__MODULE__, "IoFaultStatus#{System.unique_integer([:positive])}")
+
+    io_fault_status_name =
+      Module.concat(__MODULE__, "IoFaultStatus#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(dir)
 
@@ -60,6 +72,18 @@ defmodule Eigenforge.IO.SimulatorClientTest do
        name: subscriber_name}
     )
 
+    start_supervised!(
+      {FaultStatusSubscriber,
+       room_id: "placeholder",
+       db_path: db_path,
+       writer: writer,
+       mailbox_receipt_store: receipt_store,
+       after_action_observer: Eigenforge.Core.AfterActionObserver,
+       io_fault_status_registry: fault_registry,
+       snapshot_subscriber: subscriber_name,
+       name: Module.concat(__MODULE__, "FaultSubscriber#{System.unique_integer([:positive])}")}
+    )
+
     on_exit(fn -> File.rm_rf(dir) end)
 
     %{
@@ -71,22 +95,23 @@ defmodule Eigenforge.IO.SimulatorClientTest do
     }
   end
 
-  test "publishes simulator snapshots through the core pipeline and emits malformed observation faults", %{
-    db_path: db_path,
-    fixtures_dir: fixtures_dir,
-    mailbox_registry: mailbox_registry,
-    io_fault_status: io_fault_status,
-    pubsub_registry: pubsub_registry
-  } do
+  test "publishes simulator snapshots through the core pipeline and emits malformed observation faults",
+       %{
+         db_path: db_path,
+         fixtures_dir: fixtures_dir,
+         mailbox_registry: mailbox_registry,
+         io_fault_status: io_fault_status,
+         pubsub_registry: pubsub_registry
+       } do
     assert {:ok, _} = CommandPublisher.subscribe("commands:io", registry_name: mailbox_registry)
 
     {:ok, _client} =
       start_supervised(
         {SimulatorClient,
-      fixtures_dir: fixtures_dir,
-      io_fault_status: io_fault_status,
-      pubsub_registry: pubsub_registry,
-      name: Module.concat(__MODULE__, "Client#{System.unique_integer([:positive])}")}
+         fixtures_dir: fixtures_dir,
+         io_fault_status: io_fault_status,
+         pubsub_registry: pubsub_registry,
+         name: Module.concat(__MODULE__, "Client#{System.unique_integer([:positive])}")}
       )
 
     assert_receive {:mailbox_command, "commands:io", high_on_delivery}, 1_000
@@ -110,7 +135,10 @@ defmodule Eigenforge.IO.SimulatorClientTest do
   defp wait_for_event_types(db_path, predicate, attempts \\ 20)
 
   defp wait_for_event_types(db_path, predicate, attempts) when attempts > 0 do
-    case LedgerSQLite.query_json(db_path, "SELECT event_type FROM ledger_events ORDER BY sequence ASC;") do
+    case LedgerSQLite.query_json(
+           db_path,
+           "SELECT event_type FROM ledger_events ORDER BY sequence ASC;"
+         ) do
       {:ok, rows} ->
         event_types = Enum.map(rows, & &1["event_type"])
 

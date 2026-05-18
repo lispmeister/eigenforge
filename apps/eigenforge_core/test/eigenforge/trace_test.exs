@@ -140,11 +140,7 @@ defmodule Eigenforge.TraceTest do
   test "verify_file fails for tampered golden traces" do
     golden = Path.join(@golden_dir, "co2_high_fan_off.json")
 
-    tampered =
-      Path.join(
-        System.tmp_dir!(),
-        "eigenforge-tampered-#{System.unique_integer([:positive])}.json"
-      )
+    tampered = Path.join(@golden_dir, "tampered-co2_high_fan_off.json")
 
     on_exit(fn -> File.rm(tampered) end)
 
@@ -153,7 +149,7 @@ defmodule Eigenforge.TraceTest do
     |> String.replace("\"signature\":\"", "\"signature\":\"0", global: false)
     |> then(&File.write!(tampered, &1))
 
-    assert {:error, _reason} = Eigenforge.Trace.verify_file(tampered)
+    assert {:error, {"INV-14", :trace_mismatch}} = Eigenforge.Trace.verify_file(tampered)
   end
 
   test "run_file rejects unsupported simulator fixture schema versions" do
@@ -254,6 +250,19 @@ defmodule Eigenforge.TraceTest do
     golden = Path.join(@golden_dir, "#{name}.json")
 
     assert {:ok, trace} = Eigenforge.Trace.run_file(fixture)
+    assert trace["coverage"]["trace_ids"] == [trace_case_id(name)]
+
+    assert trace["coverage"]["step_ids"] == [
+             "OODA-V1-001",
+             "OODA-V1-002",
+             "OODA-V1-003",
+             "OODA-V1-004",
+             "OODA-V1-005",
+             "OODA-V1-006",
+             "OODA-V1-007",
+             "OODA-V1-008"
+           ]
+
     assert Eigenforge.Contracts.canonical_json(trace) == String.trim(File.read!(golden))
 
     trace
@@ -355,5 +364,12 @@ defmodule Eigenforge.TraceTest do
                event["consensus_status"] == "single_core_finalized" and
                event["quorum_ref"] == %{}
            end)
+  end
+
+  defp trace_case_id(name) do
+    name
+    |> String.upcase()
+    |> String.replace("_", "-")
+    |> then(&"TRACE-V1-#{&1}")
   end
 end

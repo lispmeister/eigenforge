@@ -4,6 +4,7 @@ defmodule Eigenforge.Core.CommandIssuerTest do
   alias Eigenforge.Contracts.NormalizedSnapshot
   alias Eigenforge.Contracts.PolicyDecision
   alias Eigenforge.Contracts.ReasonerOutcome
+  alias Eigenforge.Contracts.SignedProposal
   alias Eigenforge.Core.CommandIssuer
 
   @secret "issuer-test-secret"
@@ -137,6 +138,86 @@ defmodule Eigenforge.Core.CommandIssuerTest do
     assert first_command.idempotency_key == second_command.idempotency_key
   end
 
+  test "signed proposals carry normalized outcome and vote signature data" do
+    snapshot = snapshot("obs-fan-1")
+    reasoner = reasoner(snapshot, "outcome-1", "propose_action")
+    policy = policy(snapshot, reasoner, "policy-1")
+
+    assert {:ok, proposal} =
+             CommandIssuer.issue_signed_proposal(reasoner, nil, policy, snapshot, @secret,
+               core_node_id: "core_a",
+               consensus_decision_id: "consensus-1"
+             )
+
+    assert %SignedProposal{normalized_outcome: "propose_action", proposal_kind: "action"} =
+             proposal
+
+    assert String.starts_with?(proposal.proposal_id, "proposal-")
+    assert String.starts_with?(proposal.idempotency_key, "idem:v1:")
+    assert byte_size(proposal.payload_hash) == 64
+  end
+
+  test "signed proposals can represent no-action outcomes without changing command-envelope issuance" do
+    snapshot = snapshot("obs-fan-1")
+    reasoner = reasoner(snapshot, "outcome-2", "propose_no_action")
+    policy = policy(snapshot, reasoner, "policy-2", "no_command")
+
+    assert {:ok, proposal} =
+             CommandIssuer.issue_signed_proposal(reasoner, nil, policy, snapshot, @secret,
+               core_node_id: "core_b",
+               consensus_decision_id: "consensus-2"
+             )
+
+    assert proposal.normalized_outcome == "propose_no_action"
+    assert proposal.proposal_kind == "no_action"
+    assert proposal.requested_state == nil
+    refute proposal.proposal_id == nil
+  end
+
+  test "signed proposal identity changes when reasoner or policy ids change" do
+    snapshot = snapshot("obs-fan-1")
+    reasoner = reasoner(snapshot, "outcome-1")
+    policy = policy(snapshot, reasoner, "policy-1")
+
+    assert {:ok, first_proposal} =
+             CommandIssuer.issue_signed_proposal(reasoner, nil, policy, snapshot, @secret,
+               core_node_id: "core_a",
+               consensus_decision_id: "consensus-1"
+             )
+
+    updated_reasoner = reasoner(snapshot, "outcome-2")
+    updated_policy = policy(snapshot, updated_reasoner, "policy-2")
+
+    assert {:ok, second_proposal} =
+             CommandIssuer.issue_signed_proposal(updated_reasoner, nil, updated_policy, snapshot,
+               @secret,
+               core_node_id: "core_a",
+               consensus_decision_id: "consensus-1"
+             )
+
+    refute first_proposal.proposal_id == second_proposal.proposal_id
+  end
+
+  test "signed proposal identity changes when consensus decision changes" do
+    snapshot = snapshot("obs-fan-1")
+    reasoner = reasoner(snapshot, "outcome-1")
+    policy = policy(snapshot, reasoner, "policy-1")
+
+    assert {:ok, first_proposal} =
+             CommandIssuer.issue_signed_proposal(reasoner, nil, policy, snapshot, @secret,
+               core_node_id: "core_a",
+               consensus_decision_id: "consensus-1"
+             )
+
+    assert {:ok, second_proposal} =
+             CommandIssuer.issue_signed_proposal(reasoner, nil, policy, snapshot, @secret,
+               core_node_id: "core_a",
+               consensus_decision_id: "consensus-2"
+             )
+
+    refute first_proposal.proposal_id == second_proposal.proposal_id
+  end
+
   defp snapshot(fan_observation_id) do
     source_observation_ids =
       if fan_observation_id do
@@ -165,23 +246,23 @@ defmodule Eigenforge.Core.CommandIssuerTest do
     })
   end
 
-  defp reasoner(snapshot, reasoner_outcome_id) do
+  defp reasoner(snapshot, reasoner_outcome_id, outcome_type \\ "propose_action") do
     ReasonerOutcome.new!(%{
       reasoner_outcome_id: reasoner_outcome_id,
       reasoner_id: "core_rule_stub",
       reasoner_version: "v1",
       snapshot_id: snapshot.snapshot_id,
       snapshot_hash: snapshot.snapshot_hash,
-      outcome_type: "propose_action",
+      outcome_type: outcome_type,
       target: "actuator:fan",
-      requested_state: "on",
+      requested_state: if(outcome_type == "propose_action", do: "on", else: nil),
       reason: "test",
       confidence_bps: 10_000,
       metadata: %{}
     })
   end
 
-  defp policy(snapshot, reasoner, policy_decision_id) do
+  defp policy(snapshot, reasoner, policy_decision_id, decision \\ "allow") do
     PolicyDecision.new!(%{
       policy_decision_id: policy_decision_id,
       snapshot_id: snapshot.snapshot_id,
@@ -191,10 +272,10 @@ defmodule Eigenforge.Core.CommandIssuerTest do
       target: "actuator:fan",
       action: "command_actuator",
       scope: "room:placeholder",
-      requested_state: "on",
-      decision: "allow",
-      capability_grant_id: "cap-core-rule-stub-fan",
-      capability_status: "allow",
+      requested_state: reasoner.requested_state,
+      decision: decision,
+      capability_grant_id: if(decision == "allow", do: "cap-core-rule-stub-fan"),
+      capability_status: if(decision == "allow", do: "allow", else: "not_checked"),
       reason: "test",
       decided_at: "2026-05-08T12:00:00.000Z",
       metadata: %{}

@@ -1,6 +1,6 @@
 ---
 id: eig-bcyj
-status: open
+status: closed
 deps: [eig-3yud]
 links: []
 created: 2026-05-15T13:29:32Z

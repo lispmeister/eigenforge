@@ -29,6 +29,16 @@ defmodule Eigenforge.Trace do
   @genesis_previous_hash "eigenforge-ledger-genesis-v1"
   @ledger_backend "local_sqlite"
   @consensus_status "single_core_finalized"
+  @ooda_step_ids [
+    "OODA-V1-001",
+    "OODA-V1-002",
+    "OODA-V1-003",
+    "OODA-V1-004",
+    "OODA-V1-005",
+    "OODA-V1-006",
+    "OODA-V1-007",
+    "OODA-V1-008"
+  ]
 
   @type run_result :: {:ok, map()} | {:error, term()}
 
@@ -77,6 +87,7 @@ defmodule Eigenforge.Trace do
           "core_node_id" => resolved_core_node_id,
           "ledger_backend" => @ledger_backend,
           "consensus_status" => @consensus_status,
+          "coverage" => trace_coverage(fixture_path),
           "steps" => steps(gated_reasoner, capability, policy, command, delivery, after_action),
           "ledger_events" => Enum.map(ledger_events, &public_map/1),
           "command_envelopes" => maybe_list(command),
@@ -224,35 +235,44 @@ defmodule Eigenforge.Trace do
          "core_node_id" => core_node_id,
          "ledger_backend" => @ledger_backend,
          "consensus_status" => @consensus_status,
+         "coverage" => %{"step_ids" => step_ids, "trace_ids" => trace_ids},
          "ledger_events" => ledger_events,
          "verification" => verification
        })
-       when is_list(ledger_events) and is_map(verification) do
+       when is_list(ledger_events) and is_list(step_ids) and is_list(trace_ids) and
+              is_map(verification) do
     if is_binary(core_node_id) and core_node_id != "" and
+         step_ids == @ooda_step_ids and
+         Enum.all?(trace_ids, &is_binary/1) and
+         trace_ids != [] and
          Enum.all?(verification, fn {_key, value} -> value == true end) and
          trace_consensus_shape_valid?(ledger_events, core_node_id),
        do: :ok,
-       else: {:error, {:verification_failed, verification}}
+       else: {:error, {"INV-13", {:verification_failed, verification}}}
   end
 
-  defp verify_trace_shape(_trace), do: {:error, :missing_verification}
+  defp verify_trace_shape(_trace), do: {:error, {"INV-13", :missing_verification}}
 
   defp verify_trace_file(path, %{"fixture" => fixture_path} = trace)
        when is_binary(fixture_path) do
+    expected_fixture_path = trace_fixture_path(path, fixture_path)
+    expected_trace_id = trace_case_id(expected_fixture_path)
+
     with :ok <- verify_trace_shape(trace),
-         {:ok, expected_trace} <- run_file(trace_fixture_path(path, fixture_path)) do
+         :ok <- verify_trace_coverage(trace, expected_trace_id),
+         {:ok, expected_trace} <- run_file(expected_fixture_path) do
       expected_json = Contracts.canonical_json(expected_trace)
       actual_json = Contracts.canonical_json(trace)
 
       if actual_json == expected_json do
         :ok
       else
-        {:error, :trace_mismatch}
+        {:error, {"INV-14", :trace_mismatch}}
       end
     end
   end
 
-  defp verify_trace_file(_path, _trace), do: {:error, :missing_fixture}
+  defp verify_trace_file(_path, _trace), do: {:error, {"INV-13", :missing_fixture}}
 
   defp ledger_hash_chain_valid?([]), do: true
 
@@ -291,27 +311,35 @@ defmodule Eigenforge.Trace do
 
   defp steps(reasoner, capability, policy, command, delivery, after_action) do
     [
-      %{"name" => "reasoner_outcome", "result" => reasoner.outcome_type},
+      step("OODA-V1-001", "reasoner_outcome", reasoner.outcome_type),
       %{
+        "step_id" => "OODA-V1-002",
         "name" => "capability_check",
         "result" => if(capability, do: capability.result, else: "not_checked")
       },
-      %{"name" => "policy_decision", "result" => policy.decision},
-      %{"name" => "finalized_decision", "result" => @consensus_status},
-      %{"name" => "local_ledger_commit", "result" => "committed"},
+      step("OODA-V1-003", "policy_decision", policy.decision),
+      step("OODA-V1-004", "finalized_decision", @consensus_status),
+      step("OODA-V1-005", "local_ledger_commit", "committed"),
       %{
+        "step_id" => "OODA-V1-006",
         "name" => "command_envelope",
         "result" => if(command, do: "issued", else: "not_delivered")
       },
       %{
+        "step_id" => "OODA-V1-007",
         "name" => "delivery_receipt",
         "result" => if(delivery, do: "issued", else: "not_applicable")
       },
       %{
+        "step_id" => "OODA-V1-008",
         "name" => "after_action",
         "result" => if(after_action, do: after_action.status, else: "not_applicable")
       }
     ]
+  end
+
+  defp step(step_id, name, result) do
+    %{"step_id" => step_id, "name" => name, "result" => result}
   end
 
   defp maybe_list(nil), do: []
@@ -360,6 +388,42 @@ defmodule Eigenforge.Trace do
 
       if File.exists?(derived_path), do: derived_path, else: Path.expand(fixture_path)
     end
+  end
+
+  defp verify_trace_coverage(
+         %{"coverage" => %{"trace_ids" => trace_ids, "step_ids" => step_ids}},
+         expected_trace_id
+       )
+       when is_list(trace_ids) and is_list(step_ids) do
+    if expected_trace_id in trace_ids and step_ids == @ooda_step_ids do
+      :ok
+    else
+      {:error, {"INV-14", {:missing_trace_coverage, expected_trace_id}}}
+    end
+  end
+
+  defp verify_trace_coverage(_trace, expected_trace_id),
+    do: {:error, {"INV-14", {:missing_trace_coverage, expected_trace_id}}}
+
+  defp trace_coverage(fixture_path) do
+    trace_ids =
+      case fixture_path do
+        nil -> []
+        path -> [trace_case_id(path)]
+      end
+
+    %{
+      "trace_ids" => trace_ids,
+      "step_ids" => @ooda_step_ids
+    }
+  end
+
+  defp trace_case_id(path) do
+    path
+    |> Path.basename(".json")
+    |> String.upcase()
+    |> String.replace("_", "-")
+    |> then(&"TRACE-V1-#{&1}")
   end
 
   defp core_node_id(opts), do: Keyword.get(opts, :core_node_id, default_core_node_id())

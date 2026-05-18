@@ -3,6 +3,8 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
 
   alias Eigenforge.Contracts
   alias Eigenforge.Contracts.CommandEnvelope
+  alias Eigenforge.Contracts.SignedProposal
+  alias Eigenforge.Core.FaultStatusSubscriber
   alias Eigenforge.Core.IoFaultStatus
   alias Eigenforge.Core.LedgerSQLite
   alias Eigenforge.Core.LedgerWriter
@@ -11,6 +13,7 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
   alias Eigenforge.IO.HomeAssistantClient
   alias Eigenforge.Mailbox.CommandPublisher
   alias Eigenforge.Mailbox.ReceiptStore
+  alias Eigenforge.Mailbox.SignedProposalPublisher
 
   defmodule FlakyTransport do
     @behaviour Eigenforge.IO.HomeAssistantClient.Transport
@@ -153,6 +156,64 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     def command(_conn, _request), do: {:ok, %{accepted: true}}
   end
 
+  defmodule QuorumTransport do
+    @behaviour Eigenforge.IO.HomeAssistantClient.Transport
+
+    @impl true
+    def connect(_url, _token), do: {:ok, :fake_conn, nominal_states()}
+
+    @impl true
+    def connect(url, token, _opts), do: connect(url, token)
+
+    @impl true
+    def command(_conn, _request), do: {:ok, %{accepted: true}}
+
+    defp nominal_states do
+      %{
+        "sensor.placeholder_co2" => %{
+          "entity_id" => "sensor.placeholder_co2",
+          "entity_class" => "sensor",
+          "state" => "750",
+          "observation_id" => "co2-1",
+          "observed_at" => "2026-05-10T12:00:00.000Z",
+          "received_seq" => 10,
+          "received_monotonic_ms" => 100,
+          "status" => "fresh"
+        },
+        "sensor.placeholder_humidity" => %{
+          "entity_id" => "sensor.placeholder_humidity",
+          "entity_class" => "sensor",
+          "state" => "45.0",
+          "observation_id" => "humidity-1",
+          "observed_at" => "2026-05-10T12:00:00.000Z",
+          "received_seq" => 10,
+          "received_monotonic_ms" => 100,
+          "status" => "fresh"
+        },
+        "sensor.placeholder_temperature" => %{
+          "entity_id" => "sensor.placeholder_temperature",
+          "entity_class" => "sensor",
+          "state" => "22.0",
+          "observation_id" => "temperature-1",
+          "observed_at" => "2026-05-10T12:00:00.000Z",
+          "received_seq" => 10,
+          "received_monotonic_ms" => 100,
+          "status" => "fresh"
+        },
+        "switch.placeholder_fan" => %{
+          "entity_id" => "switch.placeholder_fan",
+          "entity_class" => "switch",
+          "state" => "off",
+          "observation_id" => "fan-1",
+          "observed_at" => "2026-05-10T12:00:00.000Z",
+          "received_seq" => 10,
+          "received_monotonic_ms" => 100,
+          "status" => "fresh"
+        }
+      }
+    end
+  end
+
   setup do
     Process.delete(:ha_connect_attempts)
 
@@ -210,8 +271,20 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
     command_store =
       start_supervised!(
         {CommandExecutionStore,
-         path: Path.join(dir, "command_store.json"), name: command_store_name}
+         path: Path.join(dir, "command_store.json"), secret: "ha-secret", name: command_store_name}
       )
+
+    start_supervised!(
+      {FaultStatusSubscriber,
+       room_id: "placeholder",
+       db_path: db_path,
+       writer: writer,
+       mailbox_receipt_store: receipt_store,
+       after_action_observer: Eigenforge.Core.AfterActionObserver,
+       io_fault_status_registry: fault_registry,
+       snapshot_subscriber: self(),
+       name: Module.concat(__MODULE__, "FaultSubscriber#{System.unique_integer([:positive])}")}
+    )
 
     on_exit(fn -> File.rm_rf(dir) end)
 
@@ -289,6 +362,249 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
 
     event_types = Enum.map(rows, & &1["event_type"])
     assert "connection_status_observed" in event_types
+  end
+
+  test "receives signed proposals through the mailbox boundary without altering payloads", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       proposal_observer: self(),
+       command_observer: self(),
+       transport: ConnectedTransport,
+       name: Module.concat(__MODULE__, "ProposalClient#{System.unique_integer([:positive])}")}
+    )
+
+    proposal = signed_proposal_wire("proposal-1", "propose_action", "action", "on")
+
+    assert :ok =
+             SignedProposalPublisher.publish(
+               "signed_proposals:io",
+               proposal,
+               registry_name: mailbox_registry
+             )
+
+    assert_receive {:signed_proposal, delivered}, 1_000
+    assert delivered == proposal
+  end
+
+  test "rejects invalid signed proposals before quorum finalization", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids,
+    log_path: log_path
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       proposal_observer: self(),
+       command_observer: self(),
+       transport: QuorumTransport,
+       name: Module.concat(__MODULE__, "InvalidProposalClient#{System.unique_integer([:positive])}")}
+    )
+
+    Process.sleep(100)
+
+    invalid =
+      signed_proposal_wire("proposal-invalid", "propose_action", "action", "on")
+      |> Map.put("signature", "tampered")
+
+    assert :ok =
+             SignedProposalPublisher.publish(
+               "signed_proposals:io",
+               invalid,
+               registry_name: mailbox_registry
+             )
+
+    refute_receive {:transport_command, _request, _result}, 300
+    assert_fault_logged(log_path, "invalid_command_signature")
+  end
+
+  test "denies two matching no-action proposals without executing the actuator", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       proposal_observer: self(),
+       command_observer: self(),
+       transport: QuorumTransport,
+       name: Module.concat(__MODULE__, "DenyQuorumClient#{System.unique_integer([:positive])}")}
+    )
+
+    Process.sleep(100)
+
+    assert :ok =
+             SignedProposalPublisher.publish(
+               "signed_proposals:io",
+               signed_proposal_wire("proposal-deny-a", "core_a", "propose_no_action", "no_action", nil,
+                 consensus_decision_id: "consensus-deny"
+               ),
+               registry_name: mailbox_registry
+             )
+
+    assert :ok =
+             SignedProposalPublisher.publish(
+               "signed_proposals:io",
+               signed_proposal_wire("proposal-deny-b", "core_b", "propose_no_action", "no_action", nil,
+                 consensus_decision_id: "consensus-deny"
+               ),
+               registry_name: mailbox_registry
+             )
+
+    refute_receive {:transport_command, _request, _result}, 300
+    assert_receive {:quorum_evidence, evidence}, 1_000
+    assert evidence.decision == :deny
+    assert evidence.vote_count == 2
+  end
+
+  test "ignores duplicate proposals and still reaches quorum from distinct votes", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids,
+    log_path: log_path
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       proposal_observer: self(),
+       command_observer: self(),
+       transport: QuorumTransport,
+       name: Module.concat(__MODULE__, "DuplicateProposalClient#{System.unique_integer([:positive])}")}
+    )
+
+    Process.sleep(100)
+
+    proposal =
+      signed_proposal_wire("proposal-dup-a", "core_a", "propose_action", "action", "on",
+        consensus_decision_id: "consensus-dup"
+      )
+
+    assert :ok = SignedProposalPublisher.publish("signed_proposals:io", proposal, registry_name: mailbox_registry)
+    assert :ok = SignedProposalPublisher.publish("signed_proposals:io", proposal, registry_name: mailbox_registry)
+
+    assert_fault_logged(log_path, "duplicate_idempotency_key")
+    refute_receive {:transport_command, _request, _result}, 200
+
+    assert :ok =
+             SignedProposalPublisher.publish(
+               "signed_proposals:io",
+               signed_proposal_wire("proposal-dup-b", "core_b", "propose_action", "action", "on",
+                 consensus_decision_id: "consensus-dup"
+               ),
+               registry_name: mailbox_registry
+             )
+
+    assert_receive {:transport_command, %{"domain" => "switch", "service" => "turn_on"}, %{accepted: true}},
+                   1_000
+
+    assert_receive {:quorum_evidence, evidence}, 1_000
+    assert evidence.decision == :allow
+    assert evidence.vote_count == 2
+  end
+
+  test "executes once after two matching action proposals and publishes quorum evidence", %{
+    pubsub_registry: pubsub_registry,
+    mailbox_registry: mailbox_registry,
+    io_fault_status: io_fault_status,
+    receipt_store: receipt_store,
+    command_store: command_store,
+    entity_ids: entity_ids
+  } do
+    start_supervised!(
+      {HomeAssistantClient,
+       room_id: "placeholder",
+       home_assistant: %{url: "http://ha.local", token: "token", entity_ids: entity_ids},
+       hmac_secret: "ha-secret",
+       ha_reconnect_max_ms: 1_000,
+       io_fault_status: io_fault_status,
+       pubsub_registry: pubsub_registry,
+       mailbox_registry: mailbox_registry,
+       mailbox_receipt_store: receipt_store,
+       command_execution_store: command_store,
+       proposal_observer: self(),
+       command_observer: self(),
+       transport: QuorumTransport,
+       name: Module.concat(__MODULE__, "AllowQuorumClient#{System.unique_integer([:positive])}")}
+    )
+
+    Process.sleep(100)
+
+    assert :ok =
+             SignedProposalPublisher.publish(
+               "signed_proposals:io",
+               signed_proposal_wire("proposal-allow-a", "core_a", "propose_action", "action", "on",
+                 consensus_decision_id: "consensus-allow"
+               ),
+               registry_name: mailbox_registry
+             )
+
+    assert :ok =
+             SignedProposalPublisher.publish(
+               "signed_proposals:io",
+               signed_proposal_wire("proposal-allow-b", "core_b", "propose_action", "action", "on",
+                 consensus_decision_id: "consensus-allow"
+               ),
+               registry_name: mailbox_registry
+             )
+
+    assert_receive {:transport_command, %{"domain" => "switch", "service" => "turn_on"}, %{accepted: true}},
+                   1_000
+
+    assert_receive {:quorum_evidence, evidence}, 1_000
+    assert evidence.decision == :allow
+    assert evidence.vote_count == 2
+
+    refute_receive {:transport_command, _request, _result}, 300
   end
 
   test "wrong-class entities enter degraded mode and disable physical fan control", %{
@@ -843,10 +1159,17 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
         "eigenforge-command-store-corrupt-#{System.unique_integer([:positive])}.json"
       )
 
-    File.write!(path, ~s({"format_version":"json-canonical-v0","entries":{}}))
+    File.write!(path, ~s({"format_version":"json-canonical-v1","store_version":1,"entries":{}}))
+
+    File.write!(
+      "#{path}.manifest.json",
+      ~s({"format_version":"json-canonical-v1","store_version":1,"manifest_kind":"command_execution_store","payload_hash":"tampered","signature_version":"hmac-sha256-v1","signature":"bad"})
+    )
 
     corrupt_store =
-      start_supervised!({CommandExecutionStore, path: path, name: command_store_name})
+      start_supervised!(
+        {CommandExecutionStore, path: path, secret: "ha-secret", name: command_store_name}
+      )
 
     start_supervised!(
       {HomeAssistantClient,
@@ -989,6 +1312,74 @@ defmodule Eigenforge.IO.HomeAssistantClientTest do
         unsigned
         | signature: Contracts.sign_hmac(unsigned, "ha-secret", "eigenforge:v1:command_envelope")
       }
+    end)
+  end
+
+  defp signed_proposal_wire(
+         proposal_id,
+         normalized_outcome,
+         proposal_kind,
+         requested_state
+       ) do
+    signed_proposal_wire(
+      proposal_id,
+      "core_a",
+      normalized_outcome,
+      proposal_kind,
+      requested_state,
+      []
+    )
+  end
+
+  defp signed_proposal_wire(
+         proposal_id,
+         core_node_id,
+         normalized_outcome,
+         proposal_kind,
+         requested_state,
+         opts
+       )
+       when is_list(opts) do
+    consensus_decision_id = Keyword.get(opts, :consensus_decision_id, "consensus-1")
+    idempotency_key = Keyword.get(opts, :idempotency_key, "idem:v1:proposal-1")
+    snapshot_id = Keyword.get(opts, :snapshot_id, "snap-1")
+    snapshot_hash = Keyword.get(opts, :snapshot_hash, String.duplicate("a", 64))
+    issued_at = Keyword.get(opts, :issued_at, "2026-05-08T12:00:00.000Z")
+    payload_hash = Keyword.get(opts, :payload_hash, String.duplicate("b", 64))
+
+    proposal =
+      SignedProposal.new!(%{
+        proposal_id: proposal_id,
+        core_node_id: core_node_id,
+        proposal_kind: proposal_kind,
+        normalized_outcome: normalized_outcome,
+        consensus_decision_id: consensus_decision_id,
+        snapshot_id: snapshot_id,
+        snapshot_seq: 1,
+        snapshot_hash: snapshot_hash,
+        subject: "core_rule_stub",
+        target: "actuator:fan",
+        action: if(proposal_kind == "action", do: "command_actuator", else: "no_command"),
+        scope: "room:placeholder",
+        requested_state: requested_state,
+        idempotency_key: idempotency_key,
+        issued_at: issued_at,
+        reasoner_outcome_id: "reasoner-1",
+        policy_decision_id: "policy-1",
+        payload_hash: payload_hash,
+        signature_version: "hmac-sha256-v1",
+        signature: "placeholder"
+      })
+
+    proposal
+    |> Map.from_struct()
+    |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    |> then(fn unsigned ->
+      Map.put(
+        unsigned,
+        "signature",
+        Contracts.sign_hmac(unsigned, "ha-secret", "eigenforge:v1:signed_proposal")
+      )
     end)
   end
 

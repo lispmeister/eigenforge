@@ -65,7 +65,10 @@ defmodule Eigenforge.Core.LedgerWriterTest do
       )
       |> Enum.to_list()
 
-    assert Enum.all?(results, fn {:ok, {:ok, _event}} -> true; _other -> false end)
+    assert Enum.all?(results, fn
+             {:ok, {:ok, _event}} -> true
+             _other -> false
+           end)
 
     assert {:ok, rows} =
              LedgerSQLite.query_json(
@@ -152,7 +155,9 @@ defmodule Eigenforge.Core.LedgerWriterTest do
     core_node_id: core_node_id
   } do
     failing_name = Module.concat(__MODULE__, "FailingWriter#{System.unique_integer([:positive])}")
-    recovery_name = Module.concat(__MODULE__, "RecoveryWriter#{System.unique_integer([:positive])}")
+
+    recovery_name =
+      Module.concat(__MODULE__, "RecoveryWriter#{System.unique_integer([:positive])}")
 
     {:ok, failing_writer} =
       start_supervised(
@@ -203,10 +208,7 @@ defmodule Eigenforge.Core.LedgerWriterTest do
     {:ok, recovery_writer} =
       start_supervised(
         {LedgerWriter,
-         db_path: db_path,
-         core_node_id: core_node_id,
-         secret: secret,
-         name: recovery_name}
+         db_path: db_path, core_node_id: core_node_id, secret: secret, name: recovery_name}
       )
 
     assert {:ok, _event} =
@@ -268,7 +270,7 @@ defmodule Eigenforge.Core.LedgerWriterTest do
                "UPDATE ledger_events SET signature = 'tampered' WHERE sequence = 1;"
              )
 
-    assert {:error, {:bad_signature, 1}} =
+    assert {:error, {"INV-12", {:bad_signature, 1}}} =
              LedgerWriter.start_link(
                db_path: db_path,
                core_node_id: core_node_id,
@@ -279,14 +281,10 @@ defmodule Eigenforge.Core.LedgerWriterTest do
 
   test "ledger write paths do not use replace or conflict-update SQL" do
     writer_source =
-      File.read!(
-        Path.expand("../../../lib/eigenforge/core/ledger_writer.ex", __DIR__)
-      )
+      File.read!(Path.expand("../../../lib/eigenforge/core/ledger_writer.ex", __DIR__))
 
     sqlite_source =
-      File.read!(
-        Path.expand("../../../lib/eigenforge/core/ledger_sqlite.ex", __DIR__)
-      )
+      File.read!(Path.expand("../../../lib/eigenforge/core/ledger_sqlite.ex", __DIR__))
 
     refute writer_source =~ "INSERT OR REPLACE"
     refute writer_source =~ "ON CONFLICT"
