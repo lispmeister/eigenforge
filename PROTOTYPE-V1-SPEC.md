@@ -1,6 +1,64 @@
 # Eigenforge Prototype V1 Implementation Spec
 
+```text
+spec_id: eigenforge.prototype_v1
+spec_version: 1
+status: implementation_spec
+primary_layers:
+  - intent
+  - safety
+  - requirements
+  - architecture
+  - contracts
+  - verification
+```
+
+## Traceability Conventions
+
+This spec uses stable IDs to make requirements, contracts, invariants, tests,
+and future tickets traceable without replacing Markdown as the authoring
+format.
+
+```text
+INTENT-V1-*     high-level goals
+NON-GOAL-V1-*   explicitly excluded behavior
+SLICE-V1-*      implementation slice/order constraints
+REQ-V1-*        executable V1 requirements
+SAFE-V1-*       safety/control constraints
+COMP-V1-*       component contracts
+AUTH-V1-*       payload authority classes
+THREAT-V1-*     threat-model claims
+CANON-V1-*      canonical JSON rules
+SIGN-V1-*       signing rules
+CONTRACT-V1-*   data/schema/signature contracts
+OODA-V1-*       ordered control-loop steps
+POLICY-V1-*     capability and policy rules
+PROTO-V1-*      command/delivery protocol rules
+RECOVERY-V1-*   restart/recovery rules
+AA-V1-*         after-action authorship and ordering rules
+LEDGER-V1-*     ledger integrity rules
+VIEW-V1-*       dashboard/view contracts
+TRACE-V1-*      golden trace acceptance cases
+COMPAT-V1-*     V1 shapes preserved for V2
+DEFERRED-V2-*   explicitly out-of-scope later work
+```
+
+IDs are normative labels for requirements already expressed in this document.
+When an ID and surrounding prose conflict, the prose section containing the ID
+is authoritative until the conflict is resolved in the same change.
+
 ## 1. Scope And Non-Goals
+
+Traceability anchors:
+
+```text
+INTENT-V1-001: Prove a small, inspectable input/output control loop.
+INTENT-V1-002: Preserve V2 multi-core voting and quorum compatibility.
+INTENT-V1-003: Keep control facts auditable through contracts, signatures,
+  golden traces, and a local append-only ledger.
+SLICE-V1-001: Simulator-backed golden traces precede Home Assistant
+  integration and dashboard work.
+```
 
 V1 proves the input/output control loop while keeping the data model compatible
 with later multi-core voting and quorum. The goal is a small, inspectable
@@ -43,16 +101,17 @@ V1 covers:
 
 V1 does not implement:
 
-- three-core voting or quorum;
-- LLM-backed reasoning;
-- manual dashboard commands;
-- hysteresis, debounce windows, or minimum actuator dwell time;
-- historical sensor charts from InfluxDB;
-- direct ESPHome control;
-- application-level signatures from sensors or actuators;
-- asymmetric cryptography or separated signing keys;
-- external ledger anchoring;
-- log rotation for IO debug files.
+- **NON-GOAL-V1-001**: three-core voting or quorum;
+- **NON-GOAL-V1-002**: LLM-backed reasoning;
+- **NON-GOAL-V1-003**: manual dashboard commands;
+- **NON-GOAL-V1-004**: hysteresis, debounce windows, or minimum actuator dwell
+  time;
+- **NON-GOAL-V1-005**: historical sensor charts from InfluxDB;
+- **NON-GOAL-V1-006**: direct ESPHome control;
+- **NON-GOAL-V1-007**: application-level signatures from sensors or actuators;
+- **NON-GOAL-V1-008**: asymmetric cryptography or separated signing keys;
+- **NON-GOAL-V1-009**: external ledger anchoring;
+- **NON-GOAL-V1-010**: log rotation for IO debug files.
 
 The V1 code should avoid shortcuts that make V2 quorum hard. V1 has one
 effective core decision path and treats the single core as a one-member
@@ -93,6 +152,16 @@ eigenforge_umbrella
   apps/eigenforge_core
   apps/eigenforge_dashboard
 ```
+
+Component contract summary:
+
+| ID | Component | Owns | Inputs | Outputs | Must not |
+| --- | --- | --- | --- | --- | --- |
+| **COMP-V1-CONTRACTS** | `eigenforge_contracts` | Shared schemas, generated modules, canonical JSON, hashing, HMAC helpers | Checked-in JSON Schemas | Contract modules, hashes, signatures | Own runtime authority, IO, dashboard, mailbox delivery, or ledger writing |
+| **COMP-V1-IO** | `eigenforge_io` | Outside-world boundary, normalization, adapter execution, IO fault/status stream | Home Assistant or simulator observations, command envelopes | Normalized snapshots, IO fault/status events, adapter attempts | Decide, evaluate policy, write core ledgers, or author after-action truth |
+| **COMP-V1-CORE** | `eigenforge_core` | OODA loop, authority, finalization, local ledger, command issuance, after-action authorship | Live IO stream, IO fault/status stream, signed config | Ledger events, command envelopes, after-action events | Execute physical IO or bypass durable persistence before command delivery |
+| **COMP-V1-MAILBOX** | `eigenforge_mailbox` | Mechanical delivery journal, routing, delivery receipts, projections | Committed command-envelope events | Delivery receipts, command publication, delivery projections | Authorize, mutate envelopes, validate policy, reinterpret command semantics |
+| **COMP-V1-DASHBOARD** | `eigenforge_dashboard` | Read-only observability | Live streams and read models | LiveView display | Mutate system state, issue commands, call Home Assistant |
 
 ### App Responsibilities
 
@@ -335,6 +404,18 @@ V1 startup behavior is mode-dependent:
 | Previously initialized mailbox receipt store is missing, corrupt, or fails verification | start degraded and do not publish or redeliver commands until repaired | start degraded for runtime; fail the affected deterministic test |
 | Unsupported checked-in schema or ledger payload version is encountered | fail startup | fail startup |
 
+Runtime requirement anchors:
+
+| ID | Requirement |
+| --- | --- |
+| **REQ-V1-RUNTIME-001** | Missing or invalid `EIGENFORGE_HMAC_SECRET` fails startup in every mode. |
+| **REQ-V1-RUNTIME-002** | Missing or invalid signed device inventory or capability config fails startup unless the artifact is an explicitly allowed unsigned simulator fixture. |
+| **REQ-V1-RUNTIME-003** | Simulator mode must not connect to Home Assistant or any other outside data source. |
+| **REQ-V1-RUNTIME-004** | Home Assistant may start degraded only after otherwise valid configuration loads. |
+| **REQ-V1-RUNTIME-005** | Local core ledger hash/signature verification failure fails startup. |
+| **REQ-V1-RUNTIME-006** | Corrupt or missing projection tables with a valid ledger are rebuilt before start. |
+| **REQ-V1-RUNTIME-007** | Unsupported checked-in schema or ledger payload versions fail startup. |
+
 ### Home Assistant Mode
 
 Home Assistant mode uses:
@@ -511,7 +592,20 @@ V1 does **not** defend against compromise of the process that holds
 `EIGENFORGE_HMAC_SECRET` in memory. A compromised core process can forge
 valid signatures and produce a plausible-but-fraudulent ledger. Key
 separation, process isolation, hardware security modules, and asymmetric
-cryptography are explicitly V2/V3 work (see §14).
+cryptography are explicitly V2/V3 work (see §15).
+
+Threat-model anchors:
+
+```text
+THREAT-V1-001: Offline ledger tampering is detectable through hash-chain and
+  HMAC verification.
+THREAT-V1-002: External audit can recompute hashes and verify signatures when
+  the shared HMAC secret is provided separately.
+THREAT-V1-003: Credential leakage is mitigated by mandatory redaction before
+  canonical payloads, traces, logs, dashboard output, failures, or exceptions.
+THREAT-V1-004: Process compromise of a holder of EIGENFORGE_HMAC_SECRET is out
+  of scope for V1.
+```
 
 ### Contract Payload Authority Classes
 
@@ -545,12 +639,12 @@ At minimum, schemas must exist for:
 
 V1 uses three payload authority classes:
 
-- Unsigned contract payloads are schema-valid runtime or test messages that do
+- **AUTH-V1-001**: Unsigned contract payloads are schema-valid runtime or test messages that do
   not carry authority by themselves. Normalized snapshots, IO fault/status
   events, and unsigned simulator snapshot fixtures are in this class.
-- Detached-signed payloads are schema-valid JSON files with a separate
+- **AUTH-V1-002**: Detached-signed payloads are schema-valid JSON files with a separate
   signature sidecar, such as runtime device inventory and capability grants.
-- Ledger-contained durable payloads are schema-valid event payloads whose
+- **AUTH-V1-003**: Ledger-contained durable payloads are schema-valid event payloads whose
   authority comes from the signed ledger event envelope that contains them.
   They do not need a second inner signature unless their own contract says so.
 
@@ -616,6 +710,22 @@ Eigenforge.Contracts.IoFaultStatusEvent
 Eigenforge.Contracts.LedgerEvent
 ```
 
+Contract registry:
+
+| ID | Module | Schema |
+| --- | --- | --- |
+| **CONTRACT-V1-DEVICE-INVENTORY** | `Eigenforge.Contracts.DeviceInventory` | `device_inventory.schema.json` |
+| **CONTRACT-V1-CAPABILITY-GRANT** | `Eigenforge.Contracts.CapabilityGrant` | `capability_grant.schema.json` |
+| **CONTRACT-V1-CAPABILITY-CHECK** | `Eigenforge.Contracts.CapabilityCheck` | `capability_check.schema.json` |
+| **CONTRACT-V1-POLICY-DECISION** | `Eigenforge.Contracts.PolicyDecision` | `policy_decision.schema.json` |
+| **CONTRACT-V1-NORMALIZED-SNAPSHOT** | `Eigenforge.Contracts.NormalizedSnapshot` | `normalized_snapshot.schema.json` |
+| **CONTRACT-V1-REASONER-OUTCOME** | `Eigenforge.Contracts.ReasonerOutcome` | `reasoner_outcome.schema.json` |
+| **CONTRACT-V1-COMMAND-ENVELOPE** | `Eigenforge.Contracts.CommandEnvelope` | `command_envelope.schema.json` |
+| **CONTRACT-V1-DELIVERY-RECEIPT** | `Eigenforge.Contracts.DeliveryReceipt` | `delivery_receipt.schema.json` |
+| **CONTRACT-V1-AFTER-ACTION** | `Eigenforge.Contracts.AfterActionEvent` | `after_action_event.schema.json` |
+| **CONTRACT-V1-IO-FAULT-STATUS** | `Eigenforge.Contracts.IoFaultStatusEvent` | `io_fault_status_event.schema.json` |
+| **CONTRACT-V1-LEDGER-EVENT** | `Eigenforge.Contracts.LedgerEvent` | `ledger_event.schema.json` |
+
 This establishes a V1 control message ABI:
 
 ```text
@@ -628,38 +738,38 @@ V1 uses canonical JSON for signatures and hashes.
 
 Canonicalization rules:
 
-- encode as UTF-8 JSON;
-- object keys must be strings;
-- sort object keys lexicographically;
-- emit no insignificant whitespace;
-- use normal JSON string escaping;
-- do not escape `/`;
-- reject duplicate object keys before canonicalization;
-- preserve array order exactly as supplied by the contract;
-- preserve `null` only for schema-declared nullable fields;
-- preserve integers as integers;
-- reject integers outside signed 64-bit range in V1 signed payloads;
-- avoid floats in signed payloads where possible;
-- represent fractional values as scaled integers or strings when they need to
+- **CANON-V1-001**: encode as UTF-8 JSON;
+- **CANON-V1-002**: object keys must be strings;
+- **CANON-V1-003**: sort object keys lexicographically;
+- **CANON-V1-004**: emit no insignificant whitespace;
+- **CANON-V1-005**: use normal JSON string escaping;
+- **CANON-V1-006**: do not escape `/`;
+- **CANON-V1-007**: reject duplicate object keys before canonicalization;
+- **CANON-V1-008**: preserve array order exactly as supplied by the contract;
+- **CANON-V1-009**: preserve `null` only for schema-declared nullable fields;
+- **CANON-V1-010**: preserve integers as integers;
+- **CANON-V1-011**: reject integers outside signed 64-bit range in V1 signed payloads;
+- **CANON-V1-012**: avoid floats in signed payloads where possible;
+- **CANON-V1-013**: represent fractional values as scaled integers or strings when they need to
   be signed;
-- represent timestamps as ISO-8601 UTC strings with millisecond precision;
-- preserve Unicode code points as supplied; V1 does not perform Unicode
+- **CANON-V1-014**: represent timestamps as ISO-8601 UTC strings with millisecond precision;
+- **CANON-V1-015**: preserve Unicode code points as supplied; V1 does not perform Unicode
   normalization before signing, so producers must emit a stable normalized form
   for any human-authored strings they sign;
-- exclude detached signature sidecars from the payload they sign;
-- for command envelopes, `payload_hash` covers the command body excluding
+- **CANON-V1-016**: exclude detached signature sidecars from the payload they sign;
+- **SIGN-V1-001**: for command envelopes, `payload_hash` covers the command body excluding
   `payload_hash` and `signature`;
-- for command envelopes, `signature` covers the command body including
+- **SIGN-V1-002**: for command envelopes, `signature` covers the command body including
   `payload_hash` but excluding `signature`;
-- for delivery receipts, `signature` covers the receipt body excluding
+- **SIGN-V1-003**: for delivery receipts, `signature` covers the receipt body excluding
   `signature`; delivery receipts do not carry a separate `payload_hash` in V1;
-- for ledger events, `payload_hash` covers `payload` only;
-- for ledger events, `event_hash` covers the ledger envelope excluding
+- **SIGN-V1-004**: for ledger events, `payload_hash` covers `payload` only;
+- **SIGN-V1-005**: for ledger events, `event_hash` covers the ledger envelope excluding
   `event_hash` and `signature`;
-- for ledger events, `signature` covers the ledger envelope including
+- **SIGN-V1-006**: for ledger events, `signature` covers the ledger envelope including
   `event_hash` but excluding `signature`;
-- for detached config sidecars, `payload_hash` covers the config payload;
-- for detached config sidecars, `signature` covers the sidecar body including
+- **SIGN-V1-007**: for detached config sidecars, `payload_hash` covers the config payload;
+- **SIGN-V1-008**: for detached config sidecars, `signature` covers the sidecar body including
   `payload_hash` and `signature_version`, excluding `signature`.
 
 Use the same canonicalization implementation for config signing, capability
@@ -799,6 +909,18 @@ mix eigenforge.capability.grant \
 The device inventory is the source of truth for available sensors, actuators,
 room identity, Home Assistant entity mappings, units, actuator capabilities,
 and actuator idempotency metadata.
+
+Domain and safety anchors:
+
+| ID | Rule |
+| --- | --- |
+| **REQ-V1-DEVICE-001** | Runtime config must contain exactly one active room in V1. |
+| **SAFE-V1-CO2-CONTROL** | CO2 is the only control-authoritative sensor input in V1. |
+| **SAFE-V1-OBSERVE-ONLY** | Humidity and temperature are observe-only inputs in V1. |
+| **SAFE-V1-CO2-MISSING** | Missing, malformed, unavailable, unknown, `not_yet_observed`, or stale CO2 denies physical fan commands. |
+| **SAFE-V1-FAN-OFF** | Fan-off may be commanded only from fresh CO2 below the nominal minimum and after in-flight/restart recovery has resolved. |
+| **SAFE-V1-IDEMPOTENT-FAN** | Unknown or stale fan state may permit fan on/off because the V1 fan actuator is idempotent. |
+| **SAFE-V1-NON-IDEMPOTENT-BLIND** | Unknown or stale actuator state denies blind commands for non-idempotent actuators. |
 
 V1 supports one room, but all contracts keep `room_id`.
 
@@ -1044,6 +1166,15 @@ Decision relevance:
   actuator is idempotent. Non-idempotent actuators must not receive blind
   commands.
 
+Decision-relevance matrix:
+
+| Source | Status class | Control effect |
+| --- | --- | --- |
+| CO2 | `stale`, `missing`, `malformed`, `unavailable`, `unknown`, `not_yet_observed` | Deny physical command and record stale/deny/no-command path. |
+| Humidity | `stale`, `missing`, `malformed`, `unavailable`, `unknown`, `not_yet_observed` | Observe-only dashboard/fault context; does not deny fan action by itself. |
+| Temperature | `stale`, `missing`, `malformed`, `unavailable`, `unknown`, `not_yet_observed` | Observe-only dashboard/fault context; does not deny fan action by itself. |
+| Fan | `stale`, `unknown`, `not_yet_observed` | Allows fan on/off only because the fan is idempotent; denies blind commands for non-idempotent actuators. |
+
 Unknown, unavailable, malformed, or missing Home Assistant values should not
 crash the pipeline. They should be represented as rejected live observations.
 If they affect decision safety, core records the relevant durable
@@ -1197,6 +1328,20 @@ nominal range enter the reasoner.
 
 Flutter, hysteresis, debounce windows, and dwell time are deferred. V1 only
 avoids redundant commands when the actuator is already in the requested state.
+
+Ordered OODA anchors:
+
+```text
+OODA-V1-001: Validate normalized snapshot shape, version, and decision
+  relevance.
+OODA-V1-002: Evaluate CO2 freshness and threshold state.
+OODA-V1-003: Apply the fixed actuator-state gate after raw reasoner output.
+OODA-V1-004: Check capability only when physical action remains proposed.
+OODA-V1-005: Evaluate policy and produce a policy decision contract.
+OODA-V1-006: Finalize and persist decision/action facts before delivery.
+OODA-V1-007: Issue a signed command envelope only after durable local commit.
+OODA-V1-008: Observe IO state/fault streams and record terminal after-action.
+```
 
 ### Reasoner Interface
 
@@ -1417,6 +1562,19 @@ schema enum, golden trace expectation, or acceptance criterion.
 The "already in desired state" case is a reasoner `propose_no_action` outcome,
 not a policy denial.
 
+Policy decision anchors:
+
+| ID | Reasoner/gate outcome | Capability check | Policy result |
+| --- | --- | --- | --- |
+| **POLICY-V1-001** | `no_threshold_event` | skipped | `no_command` |
+| **POLICY-V1-002** | `insufficient_fresh_data` | skipped | `deny_stale_snapshot` |
+| **POLICY-V1-003** | `propose_no_action` | skipped | `no_command` |
+| **POLICY-V1-004** | `propose_action` with valid grant | `allow` | `allow` |
+| **POLICY-V1-005** | `propose_action` with missing grant | `deny_missing_capability` | `deny_missing_capability` |
+| **POLICY-V1-006** | `propose_action` with invalid grant | `deny_invalid_capability` | `deny_invalid_capability` |
+| **POLICY-V1-007** | unsupported physical action | checked when applicable | `deny_unsupported_action` |
+| **POLICY-V1-008** | physical action for stub-only actuator | checked when applicable | `noop_stub` |
+
 Every policy decision persisted to the ledger must include the capability
 grant, missing capability, or invalid capability that determined the result.
 For stale/no-command and no-threshold paths where no physical command is
@@ -1464,6 +1622,23 @@ not_checked
 ```
 
 ## 9. Command Envelopes And Delivery
+
+Protocol anchors:
+
+```text
+PROTO-V1-CMD: Command envelopes carry the complete signed command body and
+  references to the durable decision chain.
+PROTO-V1-IDEM: idempotency_key prevents one finalized command decision from
+  executing more than once by IO.
+PROTO-V1-EFFECT: effect_key suppresses duplicate unresolved physical work
+  across different decisions.
+PROTO-V1-MAILBOX: Mailbox stores signed delivery receipts durably before
+  publishing commands and never authorizes or mutates command semantics.
+PROTO-V1-IO-ACCEPT: IO verifies command envelope, delivery receipt, expiry,
+  committed-decision evidence, and idempotency before adapter execution.
+RECOVERY-V1-CMD: Restart recovery resolves or classifies pending command work
+  before equivalent physical commands may be issued.
+```
 
 Every command sent to IO uses a signed command envelope:
 
@@ -1724,16 +1899,16 @@ storage or test harness state.
 
 V1 restart recovery matrix:
 
-| Last durable state before restart | Recovery behavior |
-| --- | --- |
-| No `command_envelope_issued` for the decision | No command is delivered; future snapshots may produce a new decision. |
-| `command_envelope_issued` committed, no delivery receipt found | Mark command `issued` and pending; mailbox may redeliver the same envelope with the same `idempotency_key` and a fresh receipt if the envelope has not expired. If expired, core records `timed_out` after-action and does not redeliver. |
-| Delivery receipt exists with `receipt_stored` but no `publish_attempted` | Treat command as pending delivery, not physically attempted; mailbox may publish the same envelope with the same `idempotency_key` if it has not expired. If expired, core records `timed_out` and does not publish. |
-| Delivery receipt exists with `publish_attempted` but no `io_accepted` and no after-action terminal event | Treat command as pending delivery/unknown IO acceptance; mailbox may redeliver if the envelope has not expired, and IO must reject duplicate execution by `idempotency_key` if the first publish arrived. |
-| Delivery receipt exists with `io_accepted`, no after-action terminal event | Treat command as in-flight; IO must reject duplicate execution by `idempotency_key`; core waits for observed actuator state or timeout before allowing an equivalent new effect. |
-| IO may have executed but core crashed before observing result | On restart, core waits for the next live actuator observation. If it confirms requested state before timeout, record `confirmed_changed` or `confirmed_already_in_state` according to the after-action rules. Otherwise record `timed_out`. |
-| IO idempotency memory lost | IO rebuilds executed `idempotency_key` state from its local durable command execution store. If that store is unavailable or fails verification, IO starts degraded and rejects command execution until the store is repaired or explicitly reinitialized for simulator/test use. |
-| Pending command timeout elapsed while node was down | Core records `timed_out` during recovery before processing new equivalent physical commands. |
+| ID | Last durable state before restart | Recovery behavior |
+| --- | --- | --- |
+| **RECOVERY-V1-CMD-001** | No `command_envelope_issued` for the decision | No command is delivered; future snapshots may produce a new decision. |
+| **RECOVERY-V1-CMD-002** | `command_envelope_issued` committed, no delivery receipt found | Mark command `issued` and pending; mailbox may redeliver the same envelope with the same `idempotency_key` and a fresh receipt if the envelope has not expired. If expired, core records `timed_out` after-action and does not redeliver. |
+| **RECOVERY-V1-CMD-003** | Delivery receipt exists with `receipt_stored` but no `publish_attempted` | Treat command as pending delivery, not physically attempted; mailbox may publish the same envelope with the same `idempotency_key` if it has not expired. If expired, core records `timed_out` and does not publish. |
+| **RECOVERY-V1-CMD-004** | Delivery receipt exists with `publish_attempted` but no `io_accepted` and no after-action terminal event | Treat command as pending delivery/unknown IO acceptance; mailbox may redeliver if the envelope has not expired, and IO must reject duplicate execution by `idempotency_key` if the first publish arrived. |
+| **RECOVERY-V1-CMD-005** | Delivery receipt exists with `io_accepted`, no after-action terminal event | Treat command as in-flight; IO must reject duplicate execution by `idempotency_key`; core waits for observed actuator state or timeout before allowing an equivalent new effect. |
+| **RECOVERY-V1-CMD-006** | IO may have executed but core crashed before observing result | On restart, core waits for the next live actuator observation. If it confirms requested state before timeout, record `confirmed_changed` or `confirmed_already_in_state` according to the after-action rules. Otherwise record `timed_out`. |
+| **RECOVERY-V1-CMD-007** | IO idempotency memory lost | IO rebuilds executed `idempotency_key` state from its local durable command execution store. If that store is unavailable or fails verification, IO starts degraded and rejects command execution until the store is repaired or explicitly reinitialized for simulator/test use. |
+| **RECOVERY-V1-CMD-008** | Pending command timeout elapsed while node was down | Core records `timed_out` during recovery before processing new equivalent physical commands. |
 
 No autonomous recovery command invariant: after restart, core must classify or
 terminally resolve every pending command for a room/target/effect before it may
@@ -1760,6 +1935,19 @@ attempted execution.
 After-action status is detected and recorded by core, not authored by IO. IO
 publishes live actuator state changes and IO fault/status events; core
 interprets those observations and records after-action events.
+
+After-action requirement anchors:
+
+```text
+AA-V1-001: Only core authors terminal after-action status.
+AA-V1-002: IO publishes live actuator state and fault/status evidence; it does
+  not author after-action truth.
+AA-V1-003: An actuator observation may confirm or contradict a command only
+  when IO-local receive ordering proves it arrived after command delivery.
+AA-V1-004: Source wall-clock timestamps alone are insufficient confirmation
+  evidence.
+AA-V1-005: Durable after-action records use terminal statuses only.
+```
 
 Expected action chain:
 
@@ -1860,6 +2048,21 @@ proved that no physical change was needed.
 
 Each core node has a local SQLite database that stores its durable
 decision/action ledger. The ledger is not the sensor historian.
+
+Ledger integrity anchors:
+
+```text
+LEDGER-V1-001: The local core ledger is the authoritative durable record of
+  finalized V1 control facts.
+LEDGER-V1-002: Runtime code appends ledger rows with plain INSERT only.
+LEDGER-V1-003: Projection tables are derived read models and may be rebuilt
+  from the ledger.
+LEDGER-V1-004: Ledger verification recomputes payload hashes, event hashes,
+  previous-event links, signatures, sequence continuity, and V1 consensus
+  fields.
+LEDGER-V1-005: Catch-up compatibility is append-only; V1 must not splice or
+  rewrite local ledger history for future multi-core evidence.
+```
 
 Do not persist the live stream of sensor observations or routine normalized
 snapshots to core SQLite. Home Assistant and InfluxDB own live and historical
@@ -2232,9 +2435,49 @@ The task should:
    consensus reference. Cite the relevant invariant ID (INV-01 through INV-14)
    in each error message.
 
+Ledger verification coverage map:
+
+| Invariant | Ledger rule | Verifier behavior | Acceptance coverage |
+| --- | --- | --- | --- |
+| **INV-01** | Command delivery follows durable local commit | Fail when command delivery appears before `command_envelope_issued` commit evidence | Golden trace command path and delivery-before-commit negative test |
+| **INV-02** | IO executes at most once per `idempotency_key` | Fail or flag duplicate execution evidence for the same idempotency key | Duplicate idempotency fault-injection test |
+| **INV-07** | Ledger is append-only | Reject update/delete/resequence evidence and verify hash chain continuity | SQLite trigger tests and tampered ledger test |
+| **INV-08** | Local sequence values are contiguous and node-local | Report first missing, duplicate, or non-contiguous sequence | Ledger verifier sequence test |
+| **INV-09** | `previous_event_hash` links to prior `event_hash` | Report first broken hash-chain link | Golden trace tamper test |
+| **INV-10** | Purpose-separated HMAC signatures | Reject signatures made with the wrong purpose label | Wrong-purpose signature test |
+| **INV-11** | Decision-chain events carry finalized consensus fields | Report missing V1 consensus fields; warn on structurally valid unsupported V2 status | V2-shape forward-compat fixture |
+| **INV-13** | Unsupported schema or format versions fail | Reject unsupported versions at startup or verification boundary | Unsupported-version startup test |
+| **INV-14** | After-action confirmation requires IO-local post-delivery ordering | Reject source wall-clock-only confirmation evidence | Old actuator observation replay test |
+
 ## 12. Dashboard
 
 V1 uses Phoenix LiveView only. Scenic is deferred.
+
+View contract:
+
+```text
+VIEW-V1-DASHBOARD
+reads:
+  - live IO stream
+  - IO fault/status stream
+  - latest_room_control_state
+  - recent_control_chains
+must_not:
+  - call Home Assistant
+  - write core SQLite ledgers
+  - issue command envelopes
+  - mutate system state
+must_display:
+  - active IO mode
+  - connection status
+  - latest CO2, humidity, and temperature readings
+  - fan state
+  - latest reasoner outcome and policy decision
+  - latest command envelope and after-action status
+  - recent durable ledger events
+  - recent raw IO fault/status events
+  - stale sensor alert status
+```
 
 The dashboard is read-only and should show:
 
@@ -2437,6 +2680,21 @@ Home Assistant.
 1. CO2 high turns fan on.
 
 ```text
+TRACE-V1-CO2-HIGH-FAN-OFF
+covers:
+  - INTENT-V1-001
+  - OODA-V1-002
+  - OODA-V1-004
+  - OODA-V1-007
+  - POLICY-V1-004
+  - PROTO-V1-IDEM
+  - PROTO-V1-MAILBOX
+  - AA-V1-001
+  - INV-01
+  - INV-02
+```
+
+```text
 snapshot: co2_ppm=1200, fan_state=off, freshness=fresh
 reasoner outcome: propose_action fan on
 capability check: allow
@@ -2447,6 +2705,17 @@ after-action: confirmed_changed observed_state=on
 ```
 
 2. CO2 high but fan already on records no-action.
+
+```text
+TRACE-V1-CO2-HIGH-FAN-ON
+covers:
+  - INTENT-V1-001
+  - OODA-V1-002
+  - OODA-V1-003
+  - POLICY-V1-003
+  - SAFE-V1-IDEMPOTENT-FAN
+  - INV-03
+```
 
 ```text
 snapshot: co2_ppm=1200, fan_state=on, freshness=fresh
@@ -2460,6 +2729,15 @@ IO command:          not delivered
 3. Stale CO2 denies action.
 
 ```text
+TRACE-V1-CO2-STALE-FAN-OFF
+covers:
+  - SAFE-V1-CO2-MISSING
+  - OODA-V1-002
+  - POLICY-V1-002
+  - INV-05
+```
+
+```text
 snapshot: co2_ppm=1200, fan_state=off, freshness=stale
 reasoner outcome: insufficient_fresh_data
 capability check: skipped
@@ -2469,6 +2747,15 @@ IO command: not delivered
 ```
 
 4. Ledger persistence failure returns an error and does not deliver.
+
+```text
+TRACE-V1-LEDGER-PERSISTENCE-FAILURE
+covers:
+  - OODA-V1-006
+  - OODA-V1-007
+  - PROTO-V1-MAILBOX
+  - INV-01
+```
 
 ```text
 snapshot: co2_ppm=1200, fan_state=off, freshness=fresh
@@ -2484,6 +2771,13 @@ The V1 field shapes (`consensus_decision_id`, `consensus_status`, `quorum_ref`,
 and supporting vote references) are promised to leave V2 migration
 straightforward. To verify this promise rather than merely assert it, commit a
 hand-built fixture:
+
+```text
+COMPAT-V1-QUORUM-SHAPE: V1 ledger and command-event fields preserve the
+  consensus identifiers and quorum reference shape needed by V2.
+TRACE-V1-V2-QUORUM-SHAPE-COMPAT: The forward-compat fixture proves V1 reports
+  structurally valid but unsupported quorum-finalized evidence with a warning.
+```
 
 ```text
 test/golden_traces/v2_quorum_shape_compat.json
@@ -2589,7 +2883,39 @@ IO debug log rotation
 non-fan actuator stubs
 ```
 
-## 14. Deferred V2/V3 Work
+## 14. Traceability Index
+
+This index is a navigation aid for reviewers, implementers, agents, and future
+verification tooling. It does not replace the detailed requirements above.
+
+| Intent / constraint | Primary requirements | Contracts / protocols | Invariants | Acceptance coverage |
+| --- | --- | --- | --- | --- |
+| **INTENT-V1-001** inspectable control loop | `OODA-V1-*`, `POLICY-V1-*` | `CONTRACT-V1-*`, `PROTO-V1-CMD` | `INV-01`, `INV-02`, `INV-03`, `INV-06` | `TRACE-V1-CO2-HIGH-FAN-OFF`, `TRACE-V1-CO2-HIGH-FAN-ON` |
+| **INTENT-V1-002** V2 compatibility | `COMPAT-V1-*` | `PROTO-V1-CMD`, `LEDGER-V1-*` | `INV-11` | `TRACE-V1-V2-QUORUM-SHAPE-COMPAT` |
+| **SAFE-V1-CO2-MISSING** deny unsafe missing control input | `OODA-V1-002`, `POLICY-V1-002` | Normalized snapshot contract, policy decision contract | `INV-05` | `TRACE-V1-CO2-STALE-FAN-OFF` |
+| **SAFE-V1-IDEMPOTENT-FAN** suppress redundant safe fan work | `OODA-V1-003`, `POLICY-V1-003` | Reasoner outcome contract | `INV-03` | `TRACE-V1-CO2-HIGH-FAN-ON` |
+| **PROTO-V1-IDEM** execute once per finalized decision | `PROTO-V1-IO-ACCEPT`, `RECOVERY-V1-CMD-*` | Command envelope, delivery receipt, IO execution store | `INV-02` | Duplicate idempotency fault-injection test |
+| **AA-V1-001** core-authored terminal after-action | `OODA-V1-008`, `AA-V1-*` | After-action event contract | `INV-06`, `INV-14` | After-action and replay fault-injection tests |
+| **LEDGER-V1 integrity** append-only signed local ledger | `LEDGER-V1-*`, verifier requirements | Ledger event envelope, canonical JSON, HMAC signing | `INV-07`, `INV-08`, `INV-09`, `INV-10`, `INV-13` | Ledger verifier, tamper, and unsupported-version tests |
+| **VIEW-V1-DASHBOARD** read-only observability | `VIEW-V1-DASHBOARD` | Projections and live stream contracts | Authority boundaries in `COMP-V1-DASHBOARD` | Dashboard acceptance and mode/status display checks |
+
+## 15. Deferred V2/V3 Work
+
+Deferred scope labels:
+
+```text
+COMPAT-V1-001: V1 keeps consensus_decision_id, consensus_status, and quorum_ref
+  fields so V2 quorum evidence can attach without changing the ledger envelope.
+COMPAT-V1-002: V1 keeps command and after-action causal references shaped for
+  later signed proposals and quorum certificates.
+DEFERRED-V2-001: Three-core voting and quorum are not implemented in V1.
+DEFERRED-V2-002: IO-as-judge finalization is described for compatibility but
+  not implemented in V1.
+DEFERRED-V2-003: Multi-core catch-up and partition repair are not implemented
+  in V1.
+DEFERRED-V2-004: Application-level sensor/actuator signatures, asymmetric
+  cryptography, external anchoring, and stronger immutable storage are deferred.
+```
 
 V2 adds three-core voting and quorum with IO as the judge:
 
