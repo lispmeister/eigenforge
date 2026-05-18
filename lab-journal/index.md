@@ -9,7 +9,7 @@ sessions, design decisions, experiments, failures, and verification results
 that do not fit cleanly into commit messages.
 
 **Last updated:** 2026-05-18
-**Total entries:** 9
+**Total entries:** 10
 **How to maintain:** Add one chronological row every time a journal file is
 created.
 
@@ -24,6 +24,7 @@ created.
 | 2026-05-14 | [journal-2026-05-14b.md](journal-2026-05-14b.md) | Fresh-eyes review: 7 implementation gaps (trace stale divergence, fan-seq columns, SQL parameterization, non-atomic writes, startup verification, redundant init, cond catch-all) and 3 spec ambiguities (no-op clause, stale payload type, effect_epoch definition); 10 tickets filed | Prototype V1 review |
 | 2026-05-15 | [journal-2026-05-15.md](journal-2026-05-15.md) | Finished the shortest V1 path, regenerated trace goldens, fixed a leaked test secret, and verified the full suite green | Prototype V1 completion |
 | 2026-05-18 | [journal-2026-05-18.md](journal-2026-05-18.md) | Surveyed specification systems, chose layered traceable Markdown for V1, and applied stable IDs, rule tables, trace coverage, and a traceability index to the Prototype V1 spec | Specification language |
+| 2026-05-18 | [journal-2026-05-18b.md](journal-2026-05-18b.md) | Committed quorum-repair and traceability changes, and recorded `edab5ce` as the witness commit for the session | Prototype V1 implementation |
 
 ## Attachments / Supporting Materials
 
